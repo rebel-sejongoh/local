@@ -1,0 +1,1 @@
+feat(dnckit): add a CLI assembler for textual assembly
