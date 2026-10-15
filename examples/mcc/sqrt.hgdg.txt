@@ -1,0 +1,182 @@
+# sqrt 예제의 HGDG (Hardware-Grounded DataFlow Graph), 주석판
+#
+# 생성: mcc build examples/kpl/sqrt.py  (R=256, K=64)  →  spine.realize(..., return_hgdg=True)
+# 정의: PrimitiveAuthor/mcc/src/mcc/grounding/hgdg.py  (DNode, DEdge, Coupling, HGDG)
+# 해설: ../../docs/mcc-internals.md §1.3, ../../docs/mcc-layout.md
+#
+# 읽는 법
+#   - HGDG는 "DNC 하나"가 하는 일이다. 4개 DNC가 모두 이 graph를 쓰고(SPMD), DNC별 차이는 주소뿐.
+#   - NODES: 유닛 이름 → DNode(unit, kind, arith, broadcast)
+#       kind = boundary(외부 메모리) | mover(데이터 이동 유닛) | compute(연산 유닛)
+#       arith = compute 노드가 실행할 Expr 부분 DAG (첫 IR의 노드)
+#   - EDGES: (prod, cons, tensor) → DEdge
+#       tensor  = 첫 IR(Expr DAG)의 노드 이름. "어떤 값이 지나가나"
+#       type    = Layout: 그 값이 prod를 떠날 때의 모양  [축=크기:stride unit]·메모리 @base
+#                   unit lane = 한 줄(128B) 안의 64 lane,  line = 주소에 기여하는 축
+#       cadence = 그 edge의 시간 리듬(tap 태그)
+#       sync    = Coupling: 두 끝이 어떻게 동기화하나
+#                   kind fifo   → FIFO backpressure, 명령 없음
+#                        dma    → SHM과의 전송, mover 자신의 일, 상대 없음
+#                        memory → 둘 다 SP를 주소로 접근 → put/get SYNC 명령 필요
+#                   cadence per_tile = tile마다 1번 / lowered = 로더 구조가 정함 / none = 동기화 없음
+#                   roles = (producer 쪽 이름, consumer 쪽 이름) → FabricProgram의 channel 이름
+#
+# 전체 흐름 (DNC 하나):
+#   SHM ─inp─▶ NCLU ─inp─▶ SPLU ─inp─▶ VU0_sqrt ─sqrt1─▶ SPSU ─sqrt1─▶ NCSU ─sqrt1─▶ SHM
+#        dma        memory       fifo             fifo           memory          dma
+
+NODES
+{
+ # 외부 메모리 경계. 입력이 들어오고 출력이 나가는 곳. 명령 없음.
+ 'SHM': DNode(unit='SHM', kind='boundary', arith=None, broadcast=False),
+
+ # NC load unit: SHM → SP 로드(uDMA).  asm: MVLOOPCNT 2 ; LDMU(32줄) ; SYNC 0x11 ; RETURN
+ 'NCLU': DNode(unit='NCLU', kind='mover', arith=None, broadcast=False),
+
+ # SP load unit: SP → VU FIFO 공급.  asm: SYNC 6 ; MVLOOPCNT 64 ; LDU ld_consumer=3 ; RETURN
+ 'SPLU': DNode(unit='SPLU', kind='mover', arith=None, broadcast=False),
+
+ # VU의 sqrt pass. 이 노드만 계산을 한다.
+ #   arith = sqrt1 = sqrt(inp)  : 원소별(map) sqrt, 결과가 출력(out=True)
+ #   asm: IMMCOPY×5 ; MVLOOPCNT 64 ; seed(EE/SHR/IME) + Newton 4회 + x·y ; out_sp=3로 SPSU에 출력
+ #   ('VU0_sqrt' = VU, pass 0, op sqrt. 실제 블록은 VU col4)
+ 'VU0_sqrt': DNode(unit='VU0_sqrt',
+                   kind='compute',
+                   arith=(Expr(name='sqrt1',      # 이 연산의 결과 값 이름 (= 아래 edge의 tensor)
+                               kind='map',        # 원소별 연산
+                               deps=('inp',),     # 입력 값
+                               axes=(),           # input 노드만 축을 직접 가짐. map은 deps 축의 합집합 (R,K)
+                               axis=None,         # reduce가 아니므로 접는 축 없음
+                               monoid=None,
+                               op='sqrt',         # emit에서 VU sqrt idiom(EE→SHR→IME→Newton)으로 매핑
+                               imm=None,          # 스칼라 피연산자 없음
+                               out=True,          # 연산의 출력 노드
+                               off=None, along=None, sel=None,  # slice/index용 필드, 해당 없음
+                               access=(), base=None),),         # conv 창 같은 access affine, 해당 없음
+                   broadcast=False),
+
+ # SP store unit: VU FIFO → SP 저장.  asm: MVLOOPCNT 64 ; STU st_producer=2 ; SYNC 9 ; RETURN
+ 'SPSU': DNode(unit='SPSU', kind='mover', arith=None, broadcast=False),
+
+ # NC store unit: SP → SHM 저장(uDMA).  asm: SYNC 0x22 ; MVLOOPCNT 2 ; STMU(32줄) ; RETURN
+ 'NCSU': DNode(unit='NCSU', kind='mover', arith=None, broadcast=False)}
+
+EDGES
+{
+ # [1] SHM → NCLU : 입력 inp를 SHM에서 가져옴
+ #   type    : 외부(SHM) 쪽이라 텐서 "전체" 크기. R=256이 lane, K=64가 line → SHM에 64줄 × (256행/64 lane=4블록)
+ #   cadence : stage = 스테이징(로드) 단계
+ #   sync    : dma = NCLU 자신의 uDMA 전송. SYNC 명령 없음
+ #   asm     : NCLU [1] LDMU  (descriptor CBR=0x8_1000 → SHM line 0x1000부터; DNC마다 base만 다름)
+ ('SHM', 'NCLU', 'inp'): DEdge(prod='SHM',
+                               cons='NCLU',
+                               tensor='inp',
+                               type=Layout(axes=(Axis(name='R', size=256, stride=1, unit='lane', dim=None),
+                                                 Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                           mem='SHM',
+                                           base='inp'),
+                               cadence={'tap': 'stage'},
+                               sync=Coupling(kind='dma', handshake=None, scope='intra', cadence='none', roles=())),
+
+ # [2] NCLU → SPLU : SP에 올라온 inp를 SPLU가 읽음
+ #   type    : 칩 안(SP)이라 "한 DNC 몫": R=64(=256/4 DNC) lane × K=64 line = SP 64줄
+ #   cadence : invariant = 루프 동안 변하지 않는 스테이징 버퍼
+ #   sync    : memory = 두 유닛이 같은 SP를 주소로 접근 → 명시적 rendezvous 필요
+ #             roles ('stage','load'): NCLU 쪽 끝 = stage(put), SPLU 쪽 끝 = load(get)
+ #             cadence lowered = 발사 횟수는 tiling이 아니라 로더 구조(LDMU 그룹)가 정함
+ #   asm     : NCLU [2] SYNC 0x11 (SEND|SPLU0 → nclu_splu0 += 1)
+ #             SPLU [0] SYNC 6    (RECV|NCLU  → wait nclu_splu0 > 0; -= 1)
+ ('NCLU', 'SPLU', 'inp'): DEdge(prod='NCLU',
+                                cons='SPLU',
+                                tensor='inp',
+                                type=Layout(axes=(Axis(name='R', size=64, stride=1, unit='lane', dim=None),
+                                                  Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                            mem='SP',
+                                            base='inp'),
+                                cadence={'tap': 'invariant'},
+                                sync=Coupling(kind='memory',
+                                              handshake=None,
+                                              scope='intra',
+                                              cadence='lowered',
+                                              roles=('stage', 'load'))),
+
+ # [3] SPLU → VU0_sqrt : inp를 한 줄씩 VU FIFO로 흘려보냄
+ #   type    : 같은 SP layout. line 축 K=64 → 64 beat(한 beat = 한 줄 = 64 lane)
+ #   cadence : re-read+shear, windows=1 = SP에서 줄 단위로 다시 읽어 스트리밍(창 1개)
+ #   sync    : fifo = FIFO backpressure로 충분. 동기화 명령 없음
+ #   asm     : SPLU MVLOOPCNT 64 ; LDU (LRF0 += 0x80; push(vu, SP[LRF0])) ×64
+ #             VU   FMA src0=4(pop splu) ×64
+ ('SPLU', 'VU0_sqrt', 'inp'): DEdge(prod='SPLU',
+                                    cons='VU0_sqrt',
+                                    tensor='inp',
+                                    type=Layout(axes=(Axis(name='R', size=64, stride=1, unit='lane', dim=None),
+                                                      Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                                mem='SP',
+                                                base='inp'),
+                                    cadence={'tap': 're-read+shear', 'windows': 1},
+                                    sync=Coupling(kind='fifo', handshake=None, scope='intra', cadence='none', roles=())),
+
+ # [4] VU0_sqrt → SPSU : 결과 sqrt1을 한 줄씩 SPSU FIFO로 보냄
+ #   tensor  : sqrt1 = 첫 IR의 출력 노드
+ #   type    : R=64 lane × K=64 line, SP 버퍼 @sqrt1
+ #   cadence : drain-cadence, drains=1 = beat마다 결과를 한 번 drain
+ #   sync    : fifo, 명령 없음
+ #   asm     : VU [24] FMA ... out_sp=3 (push spsu) ×64
+ #             SPSU MVLOOPCNT 64 ; STU (LRF0 += 0x80; SP[LRF0] := pop(vu)) ×64
+ ('VU0_sqrt', 'SPSU', 'sqrt1'): DEdge(prod='VU0_sqrt',
+                                      cons='SPSU',
+                                      tensor='sqrt1',
+                                      type=Layout(axes=(Axis(name='R', size=64, stride=1, unit='lane', dim=None),
+                                                        Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                                  mem='SP',
+                                                  base='sqrt1'),
+                                      cadence={'tap': 'drain-cadence', 'drains': 1},
+                                      sync=Coupling(kind='fifo',
+                                                    handshake=None,
+                                                    scope='intra',
+                                                    cadence='none',
+                                                    roles=())),
+
+ # [5] SPSU → NCSU : SP에 쌓인 sqrt1을 NCSU가 가져감
+ #   type    : SP 64줄 (한 DNC 몫)
+ #   cadence : invariant
+ #   sync    : memory, roles ('egress','drain'): SPSU 쪽 = egress(put), NCSU 쪽 = drain(get)
+ #             cadence per_tile = 출력 tile마다 1번 (여기서는 tile 1개 → 1번)
+ #   asm     : SPSU [2] SYNC 9    (SEND|NCSU   → spsu0_ncsu += 1)
+ #             NCSU [0] SYNC 0x22 (RECV|SPSU0 → wait spsu0_ncsu > 0; -= 1)
+ ('SPSU', 'NCSU', 'sqrt1'): DEdge(prod='SPSU',
+                                  cons='NCSU',
+                                  tensor='sqrt1',
+                                  type=Layout(axes=(Axis(name='R', size=64, stride=1, unit='lane', dim=None),
+                                                    Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                              mem='SP',
+                                              base='sqrt1'),
+                                  cadence={'tap': 'invariant'},
+                                  sync=Coupling(kind='memory',
+                                                handshake=None,
+                                                scope='intra',
+                                                cadence='per_tile',
+                                                roles=('egress', 'drain'))),
+
+ # [6] NCSU → SHM : sqrt1을 SHM에 씀 (kpl 출력 'out'의 주소; streaming_addrs가 연결)
+ #   type    : edge는 prod(NCSU)가 내보내는 layout을 단다 → 전송의 원본 쪽인 SP layout이 그대로 보임
+ #   cadence : folded = 반복 store가 loop로 접힘 (MVLOOPCNT 2 × STMU)
+ #   sync    : dma, 명령 없음
+ #   asm     : NCSU MVLOOPCNT 2 ; STMU (SP line 0x42.. → SHM line 0x1100.., 32줄씩) ×2
+ ('NCSU', 'SHM', 'sqrt1'): DEdge(prod='NCSU',
+                                 cons='SHM',
+                                 tensor='sqrt1',
+                                 type=Layout(axes=(Axis(name='R', size=64, stride=1, unit='lane', dim=None),
+                                                   Axis(name='K', size=64, stride=1, unit='line', dim=None)),
+                                             mem='SP',
+                                             base='sqrt1'),
+                                 cadence={'tap': 'folded'},
+                                 sync=Coupling(kind='dma', handshake=None, scope='intra', cadence='none', roles=()))}
+
+# 정리
+#   - 계산은 VU0_sqrt 한 노드뿐, 나머지 4개 유닛은 경로상 "떨어져 나온" mover.
+#   - layout은 경계에서만 바뀐다: SHM [R=256] → SP [R=64] (DNC 몫으로 나눔). 그 외 edge는 preserve.
+#   - sync=memory 2개 → asm의 SYNC 쌍 2개 (0x11/6, 9/0x22). sync=fifo/dma → 동기화 명령 없음.
+#   - 이 HGDG에 없는 것: 명령, 레지스터, 주소 값, DNC 번호 → emission(JIR) 이후에 생긴다.
+#   ⚠ cadence 태그(stage/invariant/re-read+shear/drain-cadence/folded)의 정확한 의미는
+#     hgdg.schedule_cadence와 layouts.temporal_readouts에서 확인한 것이 아니라 이름과 asm 대응으로 해석했다.
