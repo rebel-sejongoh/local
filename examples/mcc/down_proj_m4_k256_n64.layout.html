@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{margin:0}</style>
+<title>down_proj M4 Data Layout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column; each unit is a section with one SVG figure and its affine map underneath. */
+:root {
+  --bg: #f5f6f7;
+  --surface: #ffffff;
+  --fg: #1a1e23;
+  --muted: #5a636e;
+  --line: #cfd5dc;
+  --x: #2563c9;  --x-soft: #dce7f8;   /* activation x */
+  --w: #b4620a;  --w-soft: #f6e6d3;   /* kernel w */
+  --p: #1d8a5c;  --p-soft: #d6efe3;   /* partial sums */
+  --pad: #8a939d; --pad-soft: #eceef0; /* padding rows */
+  --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --surface: #191d22; --fg: #e4e8ec; --muted: #9aa4af; --line: #2f363e;
+    --x: #78a6ff; --x-soft: #1c2a44; --w: #f0a24e; --w-soft: #3a2a17;
+    --p: #52c993; --p-soft: #15342a; --pad: #6c7681; --pad-soft: #23282e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --surface: #191d22; --fg: #e4e8ec; --muted: #9aa4af; --line: #2f363e;
+  --x: #78a6ff; --x-soft: #1c2a44; --w: #f0a24e; --w-soft: #3a2a17;
+  --p: #52c993; --p-soft: #15342a; --pad: #6c7681; --pad-soft: #23282e;
+  color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.65 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+main { max-width: 940px; margin: 0 auto; display: grid; gap: 40px; }
+header { display: grid; gap: 10px; }
+h1 { font-size: 26px; line-height: 1.25; margin: 0; text-wrap: balance; font-weight: 600; }
+h2 { font-size: 18px; margin: 0; text-wrap: balance; font-weight: 600; }
+h2 .unit { font-family: var(--mono); font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 8px; letter-spacing: 0.02em; }
+p { margin: 0; max-width: 68ch; }
+code, .m { font-family: var(--mono); font-size: 0.88em; }
+section { display: grid; gap: 14px; min-width: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+.chip { display: inline-flex; align-items: center; gap: 6px; }
+.chip i { width: 14px; height: 14px; border-radius: 2px; border: 1.5px solid; display: inline-block; }
+.chip .cx { background: var(--x-soft); border-color: var(--x); }
+.chip .cw { background: var(--w-soft); border-color: var(--w); }
+.chip .cp { background: var(--p-soft); border-color: var(--p); }
+.chip .cpad { background: var(--pad-soft); border-color: var(--pad); border-style: dashed; }
+.idx { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px 18px; font-size: 13.5px; color: var(--muted); }
+.idx b { font-family: var(--mono); color: var(--fg); font-weight: 600; margin-right: 6px; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 14px 14px 12px; display: grid; gap: 10px; min-width: 0; }
+.scroll { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; min-width: 560px; color: var(--fg); }
+figcaption { font-size: 13.5px; color: var(--muted); max-width: 80ch; }
+pre.map { margin: 0; font: 12.5px/1.6 var(--mono); background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 4px; padding: 10px 14px; overflow-x: auto; }
+table { border-collapse: collapse; font-size: 13px; width: 100%; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+th, td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+td.m { white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.note { font-size: 13px; color: var(--muted); }
+
+/* SVG vocabulary */
+.d text { font-family: var(--mono); font-size: 11.5px; fill: var(--fg); }
+.d .t-mut { fill: var(--muted); }
+.d .t-b { font-weight: 600; }
+.d .t-s { font-size: 10.5px; }
+.d .box { fill: var(--surface); stroke: var(--fg); stroke-width: 1.2; }
+.d .fx { fill: var(--x-soft); stroke: var(--x); stroke-width: 1.2; }
+.d .fw { fill: var(--w-soft); stroke: var(--w); stroke-width: 1.2; }
+.d .fp { fill: var(--p-soft); stroke: var(--p); stroke-width: 1.2; }
+.d .fpad { fill: var(--pad-soft); stroke: var(--pad); stroke-width: 1; stroke-dasharray: 3 2; }
+.d .grid { stroke: var(--line); stroke-width: 1; }
+.d .ar { fill: none; stroke: var(--fg); stroke-width: 1.3; }
+.d .ax { fill: none; stroke: var(--x); stroke-width: 1.6; }
+.d .aw { fill: none; stroke: var(--w); stroke-width: 1.6; }
+.d .ap { fill: none; stroke: var(--p); stroke-width: 1.6; }
+.d .hx { fill: var(--x); } .d .hw { fill: var(--w); } .d .hp { fill: var(--p); } .d .hf { fill: var(--fg); }
+.d .cx { fill: var(--x); } .d .cw { fill: var(--w); } .d .cp { fill: var(--p); }
+@media (max-width: 520px) { h1 { font-size: 22px; } body { font-size: 14.5px; } }
+</style>
+</head>
+<body>
+
+<main>
+<header>
+  <h1>down_proj M4 · unit별 data layout</h1>
+  <p>DNC <span class="m">d = 4m + k</span> 한 개가 <span class="m">partial(m, k)[n] = Σ<sub>q&lt;64</sub> x[m, 64k+q] · w[64k+q, n]</span>을 계산하는 동안, 데이터가 각 unit에서 어떤 모양으로 놓이는지 그린 것입니다. 주소는 DNC 0 이미지 (<span class="m">examples/mcc/down_proj_m4_k256_n64.asm</span>) 기준입니다.</p>
+  <div class="idx">
+    <span><b>m</b>출력 행 (DNC 그룹)</span>
+    <span><b>k</b>K chunk (64개씩)</span>
+    <span><b>q</b>chunk 안의 K, 0..63</span>
+    <span><b>n</b>출력 lane (N), 0..63</span>
+    <span><b>t</b>4행 tile 안의 행, 0..3</span>
+    <span><b>r</b>TU row, 0..7</span>
+    <span><b>i</b>row 안의 K, 0..7</span>
+    <span><b>h</b>ABLU 반쪽, 0..1</span>
+  </div>
+  <div class="legend">
+    <span class="chip"><i class="cx"></i>activation x</span>
+    <span class="chip"><i class="cw"></i>kernel w</span>
+    <span class="chip"><i class="cp"></i>partial sum</span>
+    <span class="chip"><i class="cpad"></i>padding (t = 1..3, 쓰레기 값)</span>
+  </div>
+</header>
+
+<!-- DNC mesh -->
+<section>
+  <h2>DNC mesh: m × k <span class="unit">16 DNC = 4 × 4</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 860 362" role="img" aria-label="16 DNCs as a 4 by 4 mesh: rows are output rows m, columns are K chunks k, DNC d = 4m + k. The k = 0 column holds the roots; in each row the three leaves send their partial to that row's root.">
+      <defs>
+        <marker id="fm-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hp"/></marker>
+      </defs>
+      <text x="190" y="24" text-anchor="middle" class="t-b">k = 0</text><text x="190" y="40" text-anchor="middle" class="t-mut t-s">K 0–63</text>
+      <text x="326" y="24" text-anchor="middle" class="t-b">k = 1</text><text x="326" y="40" text-anchor="middle" class="t-mut t-s">K 64–127</text>
+      <text x="462" y="24" text-anchor="middle" class="t-b">k = 2</text><text x="462" y="40" text-anchor="middle" class="t-mut t-s">K 128–191</text>
+      <text x="598" y="24" text-anchor="middle" class="t-b">k = 3</text><text x="598" y="40" text-anchor="middle" class="t-mut t-s">K 192–255</text>
+      <text x="118" y="78" text-anchor="end" class="t-b">m = 0</text><text x="118" y="93" text-anchor="end" class="t-mut t-s">x[0, :]</text>
+      <text x="118" y="152" text-anchor="end" class="t-b">m = 1</text><text x="118" y="167" text-anchor="end" class="t-mut t-s">x[1, :]</text>
+      <text x="118" y="226" text-anchor="end" class="t-b">m = 2</text><text x="118" y="241" text-anchor="end" class="t-mut t-s">x[2, :]</text>
+      <text x="118" y="300" text-anchor="end" class="t-b">m = 3</text><text x="118" y="315" text-anchor="end" class="t-mut t-s">x[3, :]</text>
+      <!-- cells: x = 130 + 136k, y = 56 + 74m -->
+      <g>
+        <rect class="fp" x="130" y="56" width="120" height="46" rx="3"/><rect class="box" x="266" y="56" width="120" height="46" rx="3"/><rect class="box" x="402" y="56" width="120" height="46" rx="3"/><rect class="box" x="538" y="56" width="120" height="46" rx="3"/>
+        <rect class="fp" x="130" y="130" width="120" height="46" rx="3"/><rect class="box" x="266" y="130" width="120" height="46" rx="3"/><rect class="box" x="402" y="130" width="120" height="46" rx="3"/><rect class="box" x="538" y="130" width="120" height="46" rx="3"/>
+        <rect class="fp" x="130" y="204" width="120" height="46" rx="3"/><rect class="box" x="266" y="204" width="120" height="46" rx="3"/><rect class="box" x="402" y="204" width="120" height="46" rx="3"/><rect class="box" x="538" y="204" width="120" height="46" rx="3"/>
+        <rect class="fp" x="130" y="278" width="120" height="46" rx="3"/><rect class="box" x="266" y="278" width="120" height="46" rx="3"/><rect class="box" x="402" y="278" width="120" height="46" rx="3"/><rect class="box" x="538" y="278" width="120" height="46" rx="3"/>
+      </g>
+      <text x="190" y="75" text-anchor="middle" class="t-b">DNC 0</text><text x="190" y="92" text-anchor="middle" class="t-s cp">root</text>
+      <text x="326" y="75" text-anchor="middle" class="t-b">DNC 1</text><text x="326" y="92" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="462" y="75" text-anchor="middle" class="t-b">DNC 2</text><text x="462" y="92" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="598" y="75" text-anchor="middle" class="t-b">DNC 3</text><text x="598" y="92" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="190" y="149" text-anchor="middle" class="t-b">DNC 4</text><text x="190" y="166" text-anchor="middle" class="t-s cp">root</text>
+      <text x="326" y="149" text-anchor="middle" class="t-b">DNC 5</text><text x="326" y="166" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="462" y="149" text-anchor="middle" class="t-b">DNC 6</text><text x="462" y="166" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="598" y="149" text-anchor="middle" class="t-b">DNC 7</text><text x="598" y="166" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="190" y="223" text-anchor="middle" class="t-b">DNC 8</text><text x="190" y="240" text-anchor="middle" class="t-s cp">root</text>
+      <text x="326" y="223" text-anchor="middle" class="t-b">DNC 9</text><text x="326" y="240" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="462" y="223" text-anchor="middle" class="t-b">DNC 10</text><text x="462" y="240" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="598" y="223" text-anchor="middle" class="t-b">DNC 11</text><text x="598" y="240" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="190" y="297" text-anchor="middle" class="t-b">DNC 12</text><text x="190" y="314" text-anchor="middle" class="t-s cp">root</text>
+      <text x="326" y="297" text-anchor="middle" class="t-b">DNC 13</text><text x="326" y="314" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="462" y="297" text-anchor="middle" class="t-b">DNC 14</text><text x="462" y="314" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <text x="598" y="297" text-anchor="middle" class="t-b">DNC 15</text><text x="598" y="314" text-anchor="middle" class="t-s t-mut">leaf</text>
+      <!-- reduce buses: leaves -> root of the row -->
+      <g>
+        <path class="ap" d="M326,102 L326,114 M462,102 L462,114 M598,102 L598,114 M598,114 L190,114 L190,104" marker-end="url(#fm-p)"/>
+        <path class="ap" d="M326,176 L326,188 M462,176 L462,188 M598,176 L598,188 M598,188 L190,188 L190,178" marker-end="url(#fm-p)"/>
+        <path class="ap" d="M326,250 L326,262 M462,250 L462,262 M598,250 L598,262 M598,262 L190,262 L190,252" marker-end="url(#fm-p)"/>
+        <path class="ap" d="M326,324 L326,336 M462,324 L462,336 M598,324 L598,336 M598,336 L190,336 L190,326" marker-end="url(#fm-p)"/>
+      </g>
+      <text x="672" y="118" class="cp t-s">leaf partial → SHM → root</text>
+      <text x="672" y="75" class="t-s">out[0, :]</text>
+      <text x="672" y="149" class="t-s">out[1, :]</text>
+      <text x="672" y="223" class="t-s">out[2, :]</text>
+      <text x="672" y="297" class="t-s">out[3, :]</text>
+      <text x="130" y="356" class="t-mut t-s">d = 4m + k · 행 하나가 reduce group (MESYNC로 root와 순서 맞춤)</text>
+    </svg>
+    </div>
+    <figcaption>행은 출력 행 m(M shard), 열은 K chunk k(K split)입니다. 한 행의 DNC 4개가 같은 x 행의 서로 다른 K 64개를 맡고, k = 0인 root가 나머지 3개의 partial을 받아 더한 뒤 <span class="m">out[m, :]</span>을 씁니다. 행끼리는 데이터를 주고받지 않고, 마지막 cluster fence만 함께 합니다.</figcaption>
+  </figure>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>DNC 하나가 하는 일</th><th>모양</th><th>MAC</th></tr></thead>
+    <tbody>
+      <tr><td>논리적 계산</td><td class="m">x[m, 64k:+64] [1,64] @ w[64k:+64, :] [64,64] → [1,64]</td><td class="m">4,096</td></tr>
+      <tr><td>하드웨어가 실제로 도는 양 (4행 tile, 행 1–3 padding)</td><td class="m">[4,64] @ [64,64] → [4,64]</td><td class="m">16,384 (1/4만 유효)</td></tr>
+      <tr><td>root만: 형제 partial 더하기 (VU, 4행 단위)</td><td class="m">3 × [1,64] add</td><td class="m">—</td></tr>
+      <tr><td>16 DNC 전체</td><td class="m">x[4,256] @ w[256,64] → out[4,64]</td><td class="m">65,536</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- 0. Overall flow -->
+<section>
+  <h2>전체 흐름</h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 940 262" role="img" aria-label="Unit dataflow: w goes SHM, NCLU, SP, SPLU, XVU to TU north; x goes the same way then XVU, ABSU, AB, ABLU to TU west; TU row 7 goes to VU, SPSU, SP, NCSU, SHM.">
+      <defs>
+        <marker id="f0-k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hf"/></marker>
+        <marker id="f0-x" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hx"/></marker>
+        <marker id="f0-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hw"/></marker>
+        <marker id="f0-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hp"/></marker>
+      </defs>
+      <!-- row A -->
+      <rect class="box" x="16" y="20" width="92" height="44" rx="3"/><text x="62" y="38" text-anchor="middle" class="t-b">SHM</text><text x="62" y="54" text-anchor="middle" class="t-mut t-s">x, w</text>
+      <rect class="box" x="136" y="20" width="92" height="44" rx="3"/><text x="182" y="38" text-anchor="middle" class="t-b">NCLU</text><text x="182" y="54" text-anchor="middle" class="t-mut t-s">LDMU</text>
+      <rect class="box" x="256" y="20" width="92" height="44" rx="3"/><text x="302" y="38" text-anchor="middle" class="t-b">SP</text><text x="302" y="54" text-anchor="middle" class="t-mut t-s">0x3d8–0x41b</text>
+      <rect class="box" x="376" y="20" width="92" height="44" rx="3"/><text x="422" y="38" text-anchor="middle" class="t-b">SPLU</text><text x="422" y="54" text-anchor="middle" class="t-mut t-s">LDU</text>
+      <rect class="box" x="496" y="20" width="92" height="44" rx="3"/><text x="542" y="38" text-anchor="middle" class="t-b">XVU</text><text x="542" y="54" text-anchor="middle" class="t-mut t-s">LOGICAL pass</text>
+      <line class="ar" x1="108" y1="42" x2="134" y2="42" marker-end="url(#f0-k)"/>
+      <line class="ar" x1="228" y1="42" x2="254" y2="42" marker-end="url(#f0-k)"/>
+      <line class="ar" x1="348" y1="42" x2="374" y2="42" marker-end="url(#f0-k)"/>
+      <line class="ar" x1="468" y1="42" x2="494" y2="42" marker-end="url(#f0-k)"/>
+      <!-- TU -->
+      <rect class="box" x="850" y="20" width="76" height="150" rx="3"/>
+      <text x="888" y="88" text-anchor="middle" class="t-b">TU</text>
+      <text x="888" y="104" text-anchor="middle" class="t-mut t-s">8 rows</text>
+      <line class="aw" x1="588" y1="34" x2="848" y2="34" marker-end="url(#f0-w)"/>
+      <text x="719" y="27" text-anchor="middle" class="cw">w · 64 beats → north</text>
+      <!-- row B -->
+      <line class="ax" x1="542" y1="64" x2="542" y2="108" marker-end="url(#f0-x)"/>
+      <text x="550" y="90" class="cx">x · 4 beats</text>
+      <rect class="box" x="496" y="110" width="92" height="44" rx="3"/><text x="542" y="128" text-anchor="middle" class="t-b">ABSU</text><text x="542" y="144" text-anchor="middle" class="t-mut t-s">STU</text>
+      <rect class="box" x="616" y="110" width="92" height="44" rx="3"/><text x="662" y="128" text-anchor="middle" class="t-b">AB</text><text x="662" y="144" text-anchor="middle" class="t-mut t-s">8 × 1 KB</text>
+      <rect class="box" x="736" y="110" width="92" height="44" rx="3"/><text x="782" y="128" text-anchor="middle" class="t-b">ABLU</text><text x="782" y="144" text-anchor="middle" class="t-mut t-s">row별 LDU</text>
+      <line class="ax" x1="588" y1="132" x2="614" y2="132" marker-end="url(#f0-x)"/>
+      <line class="ax" x1="708" y1="132" x2="734" y2="132" marker-end="url(#f0-x)"/>
+      <line class="ax" x1="828" y1="132" x2="848" y2="132" marker-end="url(#f0-x)"/>
+      <text x="838" y="124" text-anchor="middle" class="cx t-s">W</text>
+      <!-- row C -->
+      <path class="ap" d="M888,170 L888,222 L830,222" marker-end="url(#f0-p)"/>
+      <text x="880" y="192" text-anchor="end" class="cp">row 7 south</text>
+      <rect class="box" x="736" y="200" width="92" height="44" rx="3"/><text x="782" y="218" text-anchor="middle" class="t-b">VU</text><text x="782" y="234" text-anchor="middle" class="t-mut t-s">acc[t]</text>
+      <rect class="box" x="616" y="200" width="92" height="44" rx="3"/><text x="662" y="218" text-anchor="middle" class="t-b">SPSU</text><text x="662" y="234" text-anchor="middle" class="t-mut t-s">STU</text>
+      <rect class="box" x="496" y="200" width="92" height="44" rx="3"/><text x="542" y="218" text-anchor="middle" class="t-b">SP</text><text x="542" y="234" text-anchor="middle" class="t-mut t-s">0x419 + t</text>
+      <rect class="box" x="376" y="200" width="92" height="44" rx="3"/><text x="422" y="218" text-anchor="middle" class="t-b">NCSU</text><text x="422" y="234" text-anchor="middle" class="t-mut t-s">STSU</text>
+      <rect class="box" x="256" y="200" width="92" height="44" rx="3"/><text x="302" y="218" text-anchor="middle" class="t-b">SHM</text><text x="302" y="234" text-anchor="middle" class="t-mut t-s">0x110 + m</text>
+      <line class="ap" x1="736" y1="222" x2="710" y2="222" marker-end="url(#f0-p)"/>
+      <line class="ap" x1="616" y1="222" x2="590" y2="222" marker-end="url(#f0-p)"/>
+      <line class="ap" x1="496" y1="222" x2="470" y2="222" marker-end="url(#f0-p)"/>
+      <line class="ap" x1="376" y1="222" x2="350" y2="222" marker-end="url(#f0-p)"/>
+    </svg>
+    </div>
+    <figcaption>w는 TU north로 들어가 TU 안에 머뭅니다(weight-stationary). x는 AB를 거쳐 각 TU row의 west로 들어가고, 부분합은 row 0 → 7로 south를 타고 내려가 VU로 나갑니다. Root DNC(k = 0)는 여기에 더해 형제 DNC 3개의 partial을 SHM → NCLU → SP → SPLU → VU로 받아 더합니다.</figcaption>
+  </figure>
+</section>
+
+<!-- 1. SP -->
+<section>
+  <h2>SP: NCLU가 올려 둔 줄, SPLU가 읽는 줄 <span class="unit">NCLU → SP → SPLU</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 680 228" role="img" aria-label="SP lines: 64 kernel lines at 0x3d8 plus q, the x line at 0x418, and stale padding lines 0x419 to 0x41b. Each line has 64 lanes in 8 slices. SPLU reads 0x418 to 0x41b as beats t 0 to 3.">
+      <!-- lane header -->
+      <text x="160" y="20" class="t-mut t-s">n = 0</text>
+      <text x="216" y="20" class="t-mut t-s">8</text><text x="272" y="20" class="t-mut t-s">16</text><text x="328" y="20" class="t-mut t-s">24</text>
+      <text x="384" y="20" class="t-mut t-s">32</text><text x="440" y="20" class="t-mut t-s">40</text><text x="496" y="20" class="t-mut t-s">48</text><text x="552" y="20" class="t-mut t-s">56</text>
+      <text x="608" y="20" text-anchor="end" class="t-mut t-s">63</text>
+      <!-- rows -->
+      <rect class="fw" x="160" y="30" width="448" height="26"/>
+      <rect class="fx" x="160" y="70" width="448" height="26"/>
+      <rect class="fpad" x="160" y="104" width="448" height="26"/>
+      <rect class="fpad" x="160" y="138" width="448" height="26"/>
+      <rect class="fpad" x="160" y="172" width="448" height="26"/>
+      <!-- slice ticks -->
+      <g class="grid">
+        <line x1="216" y1="26" x2="216" y2="200"/><line x1="272" y1="26" x2="272" y2="200"/><line x1="328" y1="26" x2="328" y2="200"/><line x1="384" y1="26" x2="384" y2="200"/>
+        <line x1="440" y1="26" x2="440" y2="200"/><line x1="496" y1="26" x2="496" y2="200"/><line x1="552" y1="26" x2="552" y2="200"/>
+      </g>
+      <text x="384" y="47" text-anchor="middle">w[64k+q, n]   q = 0..63 → 64줄</text>
+      <text x="384" y="87" text-anchor="middle">x[m, 64k + n]</text>
+      <text x="384" y="121" text-anchor="middle" class="t-mut">stale (psum band, 나중에 SPSU가 씀)</text>
+      <text x="384" y="155" text-anchor="middle" class="t-mut">stale</text>
+      <text x="384" y="189" text-anchor="middle" class="t-mut">stale</text>
+      <!-- left addr -->
+      <text x="150" y="47" text-anchor="end">0x3d8 + q</text>
+      <text x="150" y="87" text-anchor="end">0x418</text>
+      <text x="150" y="121" text-anchor="end">0x419</text>
+      <text x="150" y="155" text-anchor="end">0x41a</text>
+      <text x="150" y="189" text-anchor="end">0x41b</text>
+      <!-- right beat labels -->
+      <text x="618" y="47" class="cw">beat q</text>
+      <text x="618" y="87" class="cx">t = 0</text>
+      <text x="618" y="121" class="t-mut">t = 1</text>
+      <text x="618" y="155" class="t-mut">t = 2</text>
+      <text x="618" y="189" class="t-mut">t = 3</text>
+      <text x="160" y="220" class="t-mut t-s">세로선 = TU slice 경계 (8 lane씩). x 한 행의 64개는 SP 한 줄에 다 들어 있음.</text>
+    </svg>
+    </div>
+    <figcaption>SPLU는 w를 줄마다 하나씩 64번(beat q), x는 <span class="m">LDU {burst_size=4}</span> 한 번으로 0x418–0x41b를 연속 4줄(beat t) 읽습니다. 4줄은 K가 아니라 M의 4행 tile(Tr = 4)이고, 이 DNC의 M은 1행뿐이라 t = 1..3은 그 자리에 있던 값이 그대로 딸려 갑니다. XVU는 이 줄들을 바꾸지 않고 w는 TU north로, x는 ABSU로 넘깁니다.</figcaption>
+  </figure>
+  <pre class="map">NCLU   SP[0x3d8 + q] := SHM[0x10 + 64k + q] = w[64k+q, :]        q &lt; 64
+       SP[0x418]     := SHM[4k + m]         = x[m, 64k .. 64k+63]
+SPLU   beat q → XVU → TU.N   := SP[0x3d8 + q]
+       beat t → XVU → ABSU   := SP[0x418 + t]                            t &lt; 4</pre>
+</section>
+
+<!-- 2. ABSU -->
+<section>
+  <h2>ABSU: 한 줄을 8개 AB 영역으로 나눠 쓰기 <span class="unit">XVU → ABSU → AB</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 720 312" role="img" aria-label="ABSU splits each 128-byte beat t into eight 16-byte chunks; chunk r goes to AB region r at line t.">
+      <defs>
+        <marker id="f2-k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hf"/></marker>
+      </defs>
+      <!-- chunk headers -->
+      <text x="144" y="22" text-anchor="middle" class="t-mut t-s">0–7</text><text x="192" y="22" text-anchor="middle" class="t-mut t-s">8–15</text>
+      <text x="240" y="22" text-anchor="middle" class="t-mut t-s">16–23</text><text x="288" y="22" text-anchor="middle" class="t-mut t-s">24–31</text>
+      <text x="336" y="22" text-anchor="middle" class="t-mut t-s">32–39</text><text x="384" y="22" text-anchor="middle" class="t-mut t-s">40–47</text>
+      <text x="432" y="22" text-anchor="middle" class="t-mut t-s">48–55</text><text x="480" y="22" text-anchor="middle" class="t-mut t-s">56–63</text>
+      <text x="512" y="22" class="t-mut t-s">  lane</text>
+      <!-- beat t=0 chunks -->
+      <g>
+        <rect class="fx" x="120" y="30" width="48" height="22"/><rect class="fx" x="168" y="30" width="48" height="22"/>
+        <rect class="fx" x="216" y="30" width="48" height="22"/><rect class="fx" x="264" y="30" width="48" height="22"/>
+        <rect class="fx" x="312" y="30" width="48" height="22"/><rect class="fx" x="360" y="30" width="48" height="22"/>
+        <rect class="fx" x="408" y="30" width="48" height="22"/><rect class="fx" x="456" y="30" width="48" height="22"/>
+      </g>
+      <text x="144" y="45" text-anchor="middle">r=0</text><text x="192" y="45" text-anchor="middle">r=1</text><text x="240" y="45" text-anchor="middle">r=2</text><text x="288" y="45" text-anchor="middle">r=3</text>
+      <text x="336" y="45" text-anchor="middle">r=4</text><text x="384" y="45" text-anchor="middle">r=5</text><text x="432" y="45" text-anchor="middle">r=6</text><text x="480" y="45" text-anchor="middle">r=7</text>
+      <rect class="fpad" x="120" y="60" width="384" height="22"/>
+      <rect class="fpad" x="120" y="90" width="384" height="22"/>
+      <rect class="fpad" x="120" y="120" width="384" height="22"/>
+      <g class="grid">
+        <line x1="168" y1="60" x2="168" y2="142"/><line x1="216" y1="60" x2="216" y2="142"/><line x1="264" y1="60" x2="264" y2="142"/><line x1="312" y1="60" x2="312" y2="142"/>
+        <line x1="360" y1="60" x2="360" y2="142"/><line x1="408" y1="60" x2="408" y2="142"/><line x1="456" y1="60" x2="456" y2="142"/>
+      </g>
+      <text x="112" y="45" text-anchor="end" class="cx">beat t = 0</text>
+      <text x="112" y="75" text-anchor="end" class="t-mut">t = 1</text>
+      <text x="112" y="105" text-anchor="end" class="t-mut">t = 2</text>
+      <text x="112" y="135" text-anchor="end" class="t-mut">t = 3</text>
+      <!-- arrows down -->
+      <line class="ar" x1="144" y1="148" x2="144" y2="192" marker-end="url(#f2-k)"/><line class="ar" x1="192" y1="148" x2="192" y2="192" marker-end="url(#f2-k)"/>
+      <line class="ar" x1="240" y1="148" x2="240" y2="192" marker-end="url(#f2-k)"/><line class="ar" x1="288" y1="148" x2="288" y2="192" marker-end="url(#f2-k)"/>
+      <line class="ar" x1="336" y1="148" x2="336" y2="192" marker-end="url(#f2-k)"/><line class="ar" x1="384" y1="148" x2="384" y2="192" marker-end="url(#f2-k)"/>
+      <line class="ar" x1="432" y1="148" x2="432" y2="192" marker-end="url(#f2-k)"/><line class="ar" x1="480" y1="148" x2="480" y2="192" marker-end="url(#f2-k)"/>
+      <text x="516" y="168">16 B씩, 8개 영역에 동시에</text>
+      <text x="516" y="184" class="t-mut t-s">chunk r of beat t → AB_r line t</text>
+      <!-- regions -->
+      <g>
+        <rect class="box" x="122" y="196" width="44" height="84" rx="2"/><rect class="box" x="170" y="196" width="44" height="84" rx="2"/>
+        <rect class="box" x="218" y="196" width="44" height="84" rx="2"/><rect class="box" x="266" y="196" width="44" height="84" rx="2"/>
+        <rect class="box" x="314" y="196" width="44" height="84" rx="2"/><rect class="box" x="362" y="196" width="44" height="84" rx="2"/>
+        <rect class="box" x="410" y="196" width="44" height="84" rx="2"/><rect class="box" x="458" y="196" width="44" height="84" rx="2"/>
+      </g>
+      <g>
+        <rect class="fx" x="126" y="199" width="36" height="17"/><rect class="fx" x="174" y="199" width="36" height="17"/><rect class="fx" x="222" y="199" width="36" height="17"/><rect class="fx" x="270" y="199" width="36" height="17"/>
+        <rect class="fx" x="318" y="199" width="36" height="17"/><rect class="fx" x="366" y="199" width="36" height="17"/><rect class="fx" x="414" y="199" width="36" height="17"/><rect class="fx" x="462" y="199" width="36" height="17"/>
+      </g>
+      <g>
+        <rect class="fpad" x="126" y="219" width="36" height="17"/><rect class="fpad" x="174" y="219" width="36" height="17"/><rect class="fpad" x="222" y="219" width="36" height="17"/><rect class="fpad" x="270" y="219" width="36" height="17"/>
+        <rect class="fpad" x="318" y="219" width="36" height="17"/><rect class="fpad" x="366" y="219" width="36" height="17"/><rect class="fpad" x="414" y="219" width="36" height="17"/><rect class="fpad" x="462" y="219" width="36" height="17"/>
+        <rect class="fpad" x="126" y="239" width="36" height="17"/><rect class="fpad" x="174" y="239" width="36" height="17"/><rect class="fpad" x="222" y="239" width="36" height="17"/><rect class="fpad" x="270" y="239" width="36" height="17"/>
+        <rect class="fpad" x="318" y="239" width="36" height="17"/><rect class="fpad" x="366" y="239" width="36" height="17"/><rect class="fpad" x="414" y="239" width="36" height="17"/><rect class="fpad" x="462" y="239" width="36" height="17"/>
+        <rect class="fpad" x="126" y="259" width="36" height="17"/><rect class="fpad" x="174" y="259" width="36" height="17"/><rect class="fpad" x="222" y="259" width="36" height="17"/><rect class="fpad" x="270" y="259" width="36" height="17"/>
+        <rect class="fpad" x="318" y="259" width="36" height="17"/><rect class="fpad" x="366" y="259" width="36" height="17"/><rect class="fpad" x="414" y="259" width="36" height="17"/><rect class="fpad" x="462" y="259" width="36" height="17"/>
+      </g>
+      <text x="112" y="212" text-anchor="end" class="t-s">line 0 · 0x00</text>
+      <text x="112" y="232" text-anchor="end" class="t-s t-mut">line 1 · 0x10</text>
+      <text x="112" y="252" text-anchor="end" class="t-s t-mut">line 2 · 0x20</text>
+      <text x="112" y="272" text-anchor="end" class="t-s t-mut">line 3 · 0x30</text>
+      <text x="144" y="298" text-anchor="middle" class="t-b">AB_0</text><text x="192" y="298" text-anchor="middle" class="t-b">AB_1</text>
+      <text x="240" y="298" text-anchor="middle" class="t-b">AB_2</text><text x="288" y="298" text-anchor="middle" class="t-b">AB_3</text>
+      <text x="336" y="298" text-anchor="middle" class="t-b">AB_4</text><text x="384" y="298" text-anchor="middle" class="t-b">AB_5</text>
+      <text x="432" y="298" text-anchor="middle" class="t-b">AB_6</text><text x="480" y="298" text-anchor="middle" class="t-b">AB_7</text>
+      <text x="516" y="212" class="t-s">16 B = 8 lane</text>
+      <text x="516" y="228" class="t-s t-mut">AB_r = TU row r의 1 KB</text>
+    </svg>
+    </div>
+    <figcaption>AB 주소는 영역 하나(1 KB) 안의 10-bit byte pointer라서, 끝을 넘으면 처음으로 돌아가는 ring입니다. <span class="m">LRF0 = 0x3f0</span>은 10-bit 2의 보수로 −0x10입니다. mcc는 시작 주소에서 stride 하나를 뺀 값을 넣고(<span class="m">grounding/layouts.py</span>의 <span class="m">_absu_values</span>: −2·8, +2·8), STU가 stride를 먼저 더하므로 첫 store가 0x000에 떨어집니다. 0x400 같은 주소는 생기지 않습니다. 한 줄을 8개 영역에 16 B씩 동시에 쓰는 것은 ISA 문서로 확인했고, chunk r이 영역 r로 간다는 대응은 추정입니다.</figcaption>
+  </figure>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>STU 반복</th><th>LRF0 (전 → 후)</th><th>쓰는 byte 주소 (모든 AB_r)</th><th>PrecSim 8 B line</th><th>내용</th></tr></thead>
+    <tbody>
+      <tr><td class="m">t = 0</td><td class="m">0x3f0 (−0x10) → 0x000</td><td class="m">0x000–0x00f</td><td class="m">0, 1</td><td class="m">x[m, 64k + 8r + 0..7]</td></tr>
+      <tr><td class="m">t = 1</td><td class="m">0x000 → 0x010</td><td class="m">0x010–0x01f</td><td class="m">2, 3</td><td>padding</td></tr>
+      <tr><td class="m">t = 2</td><td class="m">0x010 → 0x020</td><td class="m">0x020–0x02f</td><td class="m">4, 5</td><td>padding</td></tr>
+      <tr><td class="m">t = 3</td><td class="m">0x020 → 0x030</td><td class="m">0x030–0x03f</td><td class="m">6, 7</td><td>padding</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <pre class="map">ABSU   AB_r[0x10·t + 2·i] := beat_t[8r + i]          r, i &lt; 8,  t &lt; 4
+       t = 0:  AB_r[0x000 .. 0x00f] = x[m, 64k + 8r + 0 .. 7]      (TU row r가 쓸 K 8개)
+       LRF0 = 0x3f0 (−0x10), LRF1 = 0x10 · AB 영역 = 1 KB ring, PrecSim은 8 B line(wr_addr &gt;&gt; 3)</pre>
+</section>
+
+<!-- 3. ABLU -->
+<section>
+  <h2>ABLU: 8 B 읽어 16 B로 복제해 west로 <span class="unit">AB_r → ABLU_r → TU row r</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 830 180" role="img" aria-label="ABLU row r reads AB_r line t, either lanes i 0 to 3 (h 0) or 4 to 7 (h 1), 8 bytes, and replicates it into a 16-byte Z for the TU west link.">
+      <defs>
+        <marker id="f3-x" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hx"/></marker>
+      </defs>
+      <!-- h brackets -->
+      <text x="230" y="16" text-anchor="middle" class="t-s">h = 0 · LRF0 (+0x0)</text>
+      <text x="390" y="16" text-anchor="middle" class="t-s">h = 1 · LRF4 (+0x8)</text>
+      <path class="ar" d="M152,30 L152,24 L308,24 L308,30"/>
+      <path class="ar" d="M312,30 L312,24 L468,24 L468,30"/>
+      <!-- i header -->
+      <text x="170" y="43" text-anchor="middle" class="t-mut t-s">i=0</text><text x="210" y="43" text-anchor="middle" class="t-mut t-s">1</text><text x="250" y="43" text-anchor="middle" class="t-mut t-s">2</text><text x="290" y="43" text-anchor="middle" class="t-mut t-s">3</text>
+      <text x="330" y="43" text-anchor="middle" class="t-mut t-s">4</text><text x="370" y="43" text-anchor="middle" class="t-mut t-s">5</text><text x="410" y="43" text-anchor="middle" class="t-mut t-s">6</text><text x="450" y="43" text-anchor="middle" class="t-mut t-s">7</text>
+      <!-- line 0 -->
+      <g>
+        <rect class="fx" x="150" y="50" width="40" height="22"/><rect class="fx" x="190" y="50" width="40" height="22"/><rect class="fx" x="230" y="50" width="40" height="22"/><rect class="fx" x="270" y="50" width="40" height="22"/>
+        <rect class="fx" x="310" y="50" width="40" height="22"/><rect class="fx" x="350" y="50" width="40" height="22"/><rect class="fx" x="390" y="50" width="40" height="22"/><rect class="fx" x="430" y="50" width="40" height="22"/>
+      </g>
+      <text x="170" y="65" text-anchor="middle" class="t-s">8r+0</text><text x="210" y="65" text-anchor="middle" class="t-s">8r+1</text><text x="250" y="65" text-anchor="middle" class="t-s">8r+2</text><text x="290" y="65" text-anchor="middle" class="t-s">8r+3</text>
+      <text x="330" y="65" text-anchor="middle" class="t-s">8r+4</text><text x="370" y="65" text-anchor="middle" class="t-s">8r+5</text><text x="410" y="65" text-anchor="middle" class="t-s">8r+6</text><text x="450" y="65" text-anchor="middle" class="t-s">8r+7</text>
+      <rect class="fpad" x="150" y="78" width="320" height="22"/>
+      <rect class="fpad" x="150" y="106" width="320" height="22"/>
+      <rect class="fpad" x="150" y="134" width="320" height="22"/>
+      <line class="grid" x1="310" y1="78" x2="310" y2="156"/>
+      <text x="142" y="65" text-anchor="end" class="t-s">t=0 · 0x00</text>
+      <text x="142" y="93" text-anchor="end" class="t-s t-mut">t=1 · 0x10</text>
+      <text x="142" y="121" text-anchor="end" class="t-s t-mut">t=2 · 0x20</text>
+      <text x="142" y="149" text-anchor="end" class="t-s t-mut">t=3 · 0x30</text>
+      <text x="16" y="110" class="t-b">AB_r</text>
+      <!-- arrow to Z -->
+      <line class="ax" x1="472" y1="61" x2="556" y2="61" marker-end="url(#f3-x)"/>
+      <text x="514" y="54" text-anchor="middle" class="cx t-s">h=0, t=0</text>
+      <!-- Z -->
+      <text x="560" y="40" class="t-s">Z → TU row r west (16 B)</text>
+      <g>
+        <rect class="fx" x="560" y="50" width="30" height="22"/><rect class="fx" x="590" y="50" width="30" height="22"/><rect class="fx" x="620" y="50" width="30" height="22"/><rect class="fx" x="650" y="50" width="30" height="22"/>
+        <rect class="fx" x="684" y="50" width="30" height="22"/><rect class="fx" x="714" y="50" width="30" height="22"/><rect class="fx" x="744" y="50" width="30" height="22"/><rect class="fx" x="774" y="50" width="30" height="22"/>
+      </g>
+      <text x="575" y="65" text-anchor="middle" class="t-s">a0</text><text x="605" y="65" text-anchor="middle" class="t-s">a1</text><text x="635" y="65" text-anchor="middle" class="t-s">a2</text><text x="665" y="65" text-anchor="middle" class="t-s">a3</text>
+      <text x="699" y="65" text-anchor="middle" class="t-s">a0</text><text x="729" y="65" text-anchor="middle" class="t-s">a1</text><text x="759" y="65" text-anchor="middle" class="t-s">a2</text><text x="789" y="65" text-anchor="middle" class="t-s">a3</text>
+      <text x="560" y="92" class="t-s">replicate=1: 8 B를 16 B로 복제</text>
+      <text x="560" y="110" class="t-s t-mut">a = x[m, 64k + 8r + 4h + 0..3]  (t = 0)</text>
+      <text x="560" y="128" class="t-s t-mut">beat 순서: h0 t0..3, 그다음 h1 t0..3</text>
+    </svg>
+    </div>
+    <figcaption>ABLU 프로그램은 하나지만 TU row마다 ABLU가 하나씩 있고, 각자 자기 1 KB 영역 AB_r만 읽습니다. <span class="m">load_type=1</span>이라 8 B(dlf16 4개)를 읽고 <span class="m">replicate=1</span>로 16 B에 두 번 채웁니다. TU slice의 8 lane이 앞 4개와 뒤 4개 모두 같은 x 4개를 보게 하려는 것입니다. LRF1–3, 5–7(다른 2 B offset)은 쓰지 않습니다.</figcaption>
+  </figure>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>LDU</th><th>시작 LRF</th><th>읽는 byte 주소 (t = 0, 1, 2, 3)</th><th>PrecSim 8 B line</th><th>a (t = 0)</th></tr></thead>
+    <tbody>
+      <tr><td class="m">h = 0 · LDU src0=LRF0</td><td class="m">0x3f0 (−0x10)</td><td class="m">0x000, 0x010, 0x020, 0x030</td><td class="m">0, 2, 4, 6</td><td class="m">x[m, 64k + 8r + 0..3]</td></tr>
+      <tr><td class="m">h = 1 · LDU src0=LRF4</td><td class="m">0x3f8 (−0x08)</td><td class="m">0x008, 0x018, 0x028, 0x038</td><td class="m">1, 3, 5, 7</td><td class="m">x[m, 64k + 8r + 4..7]</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <pre class="map">ABLU_r h, t   a := AB_r[0x10·t + 8h, +8 B)  = beat_t[8r + 4h + 0..3]
+              Z := (a, a)  → TU row r west               순서 (h, t) = (0,0..3), (1,0..3)
+.lrf          LRF0..7 = 0x3f0, 0x3f2, …, 0x3fe = −0x10 … −0x02  (mcc의 reversed lane pointer −2·(8−i); LRF0, LRF4만 사용)
+              LRF8, LRF14, LRF15 = 0x0, 0x8, 0x10                 (tile stride; LRF15가 LDU의 stride)</pre>
+</section>
+
+<!-- 4. TU column -->
+<section>
+  <h2>TU: 8 row에 w를 나눠 두고 부분합을 아래로 <span class="unit">TU rows 0..7</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 660 400" role="img" aria-label="Eight TU rows stacked. 64 w beats enter row 0 from the north; row r keeps beats 8r to 8r+7 and passes the rest south. Each row also takes x from its ABLU on the west. Partial sums flow south row by row and leave row 7 into the VU.">
+      <defs>
+        <marker id="f4-x" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hx"/></marker>
+        <marker id="f4-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hw"/></marker>
+        <marker id="f4-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hp"/></marker>
+      </defs>
+      <line class="aw" x1="360" y1="8" x2="360" y2="44" marker-end="url(#f4-w)"/>
+      <text x="370" y="28" class="cw">w beats q = 0..63 (XVU)</text>
+      <!-- rows: y = 46 + 38r -->
+      <g>
+        <rect class="fw" x="230" y="46" width="260" height="24"/><rect class="fw" x="230" y="84" width="260" height="24"/>
+        <rect class="fw" x="230" y="122" width="260" height="24"/><rect class="fw" x="230" y="160" width="260" height="24"/>
+        <rect class="fw" x="230" y="198" width="260" height="24"/><rect class="fw" x="230" y="236" width="260" height="24"/>
+        <rect class="fw" x="230" y="274" width="260" height="24"/><rect class="fw" x="230" y="312" width="260" height="24"/>
+      </g>
+      <text x="240" y="62" class="t-b">r=0</text><text x="282" y="62">keeps q 0–7 · passes 56</text>
+      <text x="240" y="100" class="t-b">r=1</text><text x="282" y="100">keeps q 8–15 · passes 48</text>
+      <text x="240" y="138" class="t-b">r=2</text><text x="282" y="138">keeps q 16–23 · passes 40</text>
+      <text x="240" y="176" class="t-b">r=3</text><text x="282" y="176">keeps q 24–31 · passes 32</text>
+      <text x="240" y="214" class="t-b">r=4</text><text x="282" y="214">keeps q 32–39 · passes 24</text>
+      <text x="240" y="252" class="t-b">r=5</text><text x="282" y="252">keeps q 40–47 · passes 16</text>
+      <text x="240" y="290" class="t-b">r=6</text><text x="282" y="290">keeps q 48–55 · passes 8</text>
+      <text x="240" y="328" class="t-b">r=7</text><text x="282" y="328">keeps q 56–63 · passes 0</text>
+      <!-- south links -->
+      <g>
+        <line class="ap" x1="360" y1="70" x2="360" y2="83" marker-end="url(#f4-p)"/><line class="ap" x1="360" y1="108" x2="360" y2="121" marker-end="url(#f4-p)"/>
+        <line class="ap" x1="360" y1="146" x2="360" y2="159" marker-end="url(#f4-p)"/><line class="ap" x1="360" y1="184" x2="360" y2="197" marker-end="url(#f4-p)"/>
+        <line class="ap" x1="360" y1="222" x2="360" y2="235" marker-end="url(#f4-p)"/><line class="ap" x1="360" y1="260" x2="360" y2="273" marker-end="url(#f4-p)"/>
+        <line class="ap" x1="360" y1="298" x2="360" y2="311" marker-end="url(#f4-p)"/>
+      </g>
+      <text x="500" y="80" class="t-s">south: 먼저 w 통과분,</text>
+      <text x="500" y="94" class="t-s cp">그다음 S_r[t] (t = 0..3)</text>
+      <!-- west ABLU -->
+      <g>
+        <rect class="box" x="110" y="46" width="90" height="24"/><rect class="box" x="110" y="84" width="90" height="24"/>
+        <rect class="box" x="110" y="122" width="90" height="24"/><rect class="box" x="110" y="160" width="90" height="24"/>
+        <rect class="box" x="110" y="198" width="90" height="24"/><rect class="box" x="110" y="236" width="90" height="24"/>
+        <rect class="box" x="110" y="274" width="90" height="24"/><rect class="box" x="110" y="312" width="90" height="24"/>
+      </g>
+      <text x="155" y="62" text-anchor="middle">ABLU_0</text><text x="155" y="100" text-anchor="middle">ABLU_1</text><text x="155" y="138" text-anchor="middle">ABLU_2</text><text x="155" y="176" text-anchor="middle">ABLU_3</text>
+      <text x="155" y="214" text-anchor="middle">ABLU_4</text><text x="155" y="252" text-anchor="middle">ABLU_5</text><text x="155" y="290" text-anchor="middle">ABLU_6</text><text x="155" y="328" text-anchor="middle">ABLU_7</text>
+      <g>
+        <line class="ax" x1="200" y1="58" x2="228" y2="58" marker-end="url(#f4-x)"/><line class="ax" x1="200" y1="96" x2="228" y2="96" marker-end="url(#f4-x)"/>
+        <line class="ax" x1="200" y1="134" x2="228" y2="134" marker-end="url(#f4-x)"/><line class="ax" x1="200" y1="172" x2="228" y2="172" marker-end="url(#f4-x)"/>
+        <line class="ax" x1="200" y1="210" x2="228" y2="210" marker-end="url(#f4-x)"/><line class="ax" x1="200" y1="248" x2="228" y2="248" marker-end="url(#f4-x)"/>
+        <line class="ax" x1="200" y1="286" x2="228" y2="286" marker-end="url(#f4-x)"/><line class="ax" x1="200" y1="324" x2="228" y2="324" marker-end="url(#f4-x)"/>
+      </g>
+      <text x="16" y="62" class="cx t-s">Z (x 4개)</text>
+      <!-- to VU -->
+      <line class="ap" x1="360" y1="336" x2="360" y2="362" marker-end="url(#f4-p)"/>
+      <rect class="box" x="310" y="364" width="100" height="26"/><text x="360" y="381" text-anchor="middle" class="t-b">VU</text>
+      <text x="372" y="353" class="cp">S_7[t]; t=0이 partial(m, k)</text>
+    </svg>
+    </div>
+    <figcaption>64개 w beat가 row 0으로 들어가서, row r이 앞의 8개(q = 8r..8r+7)를 LRF0–7에 잡고 나머지(56 − 8r개)를 south로 넘깁니다. 그 뒤 각 row는 west의 x로 K 8개짜리 내적을 하고, 위 row의 부분합(north)에 더해 south로 내립니다. row 7의 출력이 이 DNC의 K 64개 합입니다.</figcaption>
+  </figure>
+  <pre class="map">prime   LRF_r[i] := w[64k + 8r + i, :]                         i &lt; 8
+mac     LRF_r[8+t] := Σ_{i&lt;4} LRF_r[i]   · Z_i(h=0, t) + Y        Y = 0 (r = 0), S_{r-1}[t] (r &gt; 0)
+drain   S_r[t]     := Σ_{i&lt;4} LRF_r[4+i] · Z_i(h=1, t) + LRF_r[8+t]
+⇒       S_r[t] = S_{r-1}[t] + Σ_{i&lt;8} w[64k + 8r + i, :] · beat_t[8r + i]
+        S_7[0] = partial(m, k)          (TU 안에서는 dlf18, 마지막 row를 나갈 때 dlf16)</pre>
+</section>
+
+<!-- 5. TU row zoom -->
+<section>
+  <h2>TU row 한 개 안: 8 slice × 8 lane <span class="unit">TU row r</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 860 230" role="img" aria-label="One TU row is eight slices of eight lanes. Z enters slice 0 from the west and is passed east slice by slice. Each slice holds w for its lanes in LRF0 to 7 and partial sums in LRF8 to 11. Partial sums arrive from the north and leave to the south.">
+      <defs>
+        <marker id="f5-x" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hx"/></marker>
+        <marker id="f5-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hp"/></marker>
+      </defs>
+      <text x="70" y="16" class="cp t-s">north: Y = S_{r−1}[t] (lane별)</text>
+      <!-- north arrows -->
+      <g>
+        <line class="ap" x1="111" y1="26" x2="111" y2="58" marker-end="url(#f5-p)"/><line class="ap" x1="207" y1="26" x2="207" y2="58" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="303" y1="26" x2="303" y2="58" marker-end="url(#f5-p)"/><line class="ap" x1="399" y1="26" x2="399" y2="58" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="495" y1="26" x2="495" y2="58" marker-end="url(#f5-p)"/><line class="ap" x1="591" y1="26" x2="591" y2="58" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="687" y1="26" x2="687" y2="58" marker-end="url(#f5-p)"/><line class="ap" x1="783" y1="26" x2="783" y2="58" marker-end="url(#f5-p)"/>
+      </g>
+      <!-- slices x = 70 + 96s -->
+      <g>
+        <rect class="box" x="70" y="60" width="82" height="112" rx="3"/><rect class="box" x="166" y="60" width="82" height="112" rx="3"/>
+        <rect class="box" x="262" y="60" width="82" height="112" rx="3"/><rect class="box" x="358" y="60" width="82" height="112" rx="3"/>
+        <rect class="box" x="454" y="60" width="82" height="112" rx="3"/><rect class="box" x="550" y="60" width="82" height="112" rx="3"/>
+        <rect class="box" x="646" y="60" width="82" height="112" rx="3"/><rect class="box" x="742" y="60" width="82" height="112" rx="3"/>
+      </g>
+      <g>
+        <rect class="fw" x="76" y="104" width="70" height="26"/><rect class="fw" x="172" y="104" width="70" height="26"/><rect class="fw" x="268" y="104" width="70" height="26"/><rect class="fw" x="364" y="104" width="70" height="26"/>
+        <rect class="fw" x="460" y="104" width="70" height="26"/><rect class="fw" x="556" y="104" width="70" height="26"/><rect class="fw" x="652" y="104" width="70" height="26"/><rect class="fw" x="748" y="104" width="70" height="26"/>
+        <rect class="fp" x="76" y="136" width="70" height="26"/><rect class="fp" x="172" y="136" width="70" height="26"/><rect class="fp" x="268" y="136" width="70" height="26"/><rect class="fp" x="364" y="136" width="70" height="26"/>
+        <rect class="fp" x="460" y="136" width="70" height="26"/><rect class="fp" x="556" y="136" width="70" height="26"/><rect class="fp" x="652" y="136" width="70" height="26"/><rect class="fp" x="748" y="136" width="70" height="26"/>
+      </g>
+      <text x="111" y="78" text-anchor="middle" class="t-b t-s">slice 0</text><text x="111" y="94" text-anchor="middle" class="t-s t-mut">n 0–7</text>
+      <text x="207" y="78" text-anchor="middle" class="t-b t-s">slice 1</text><text x="207" y="94" text-anchor="middle" class="t-s t-mut">n 8–15</text>
+      <text x="303" y="78" text-anchor="middle" class="t-b t-s">slice 2</text><text x="303" y="94" text-anchor="middle" class="t-s t-mut">n 16–23</text>
+      <text x="399" y="78" text-anchor="middle" class="t-b t-s">slice 3</text><text x="399" y="94" text-anchor="middle" class="t-s t-mut">n 24–31</text>
+      <text x="495" y="78" text-anchor="middle" class="t-b t-s">slice 4</text><text x="495" y="94" text-anchor="middle" class="t-s t-mut">n 32–39</text>
+      <text x="591" y="78" text-anchor="middle" class="t-b t-s">slice 5</text><text x="591" y="94" text-anchor="middle" class="t-s t-mut">n 40–47</text>
+      <text x="687" y="78" text-anchor="middle" class="t-b t-s">slice 6</text><text x="687" y="94" text-anchor="middle" class="t-s t-mut">n 48–55</text>
+      <text x="783" y="78" text-anchor="middle" class="t-b t-s">slice 7</text><text x="783" y="94" text-anchor="middle" class="t-s t-mut">n 56–63</text>
+      <g class="t-s">
+        <text x="111" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="207" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="303" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="399" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text>
+        <text x="495" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="591" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="687" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text><text x="783" y="121" text-anchor="middle" class="t-s">LRF0–7 w</text>
+        <text x="111" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="207" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="303" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="399" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text>
+        <text x="495" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="591" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="687" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text><text x="783" y="153" text-anchor="middle" class="t-s">LRF8–11 t</text>
+      </g>
+      <!-- west + east -->
+      <line class="ax" x1="10" y1="88" x2="68" y2="88" marker-end="url(#f5-x)"/>
+      <text x="12" y="80" class="cx t-s">Z (west)</text>
+      <g>
+        <line class="ax" x1="152" y1="88" x2="165" y2="88" marker-end="url(#f5-x)"/><line class="ax" x1="248" y1="88" x2="261" y2="88" marker-end="url(#f5-x)"/>
+        <line class="ax" x1="344" y1="88" x2="357" y2="88" marker-end="url(#f5-x)"/><line class="ax" x1="440" y1="88" x2="453" y2="88" marker-end="url(#f5-x)"/>
+        <line class="ax" x1="536" y1="88" x2="549" y2="88" marker-end="url(#f5-x)"/><line class="ax" x1="632" y1="88" x2="645" y2="88" marker-end="url(#f5-x)"/>
+        <line class="ax" x1="728" y1="88" x2="741" y2="88" marker-end="url(#f5-x)"/>
+      </g>
+      <text x="830" y="92" class="cx t-s">E</text>
+      <!-- south -->
+      <g>
+        <line class="ap" x1="111" y1="174" x2="111" y2="204" marker-end="url(#f5-p)"/><line class="ap" x1="207" y1="174" x2="207" y2="204" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="303" y1="174" x2="303" y2="204" marker-end="url(#f5-p)"/><line class="ap" x1="399" y1="174" x2="399" y2="204" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="495" y1="174" x2="495" y2="204" marker-end="url(#f5-p)"/><line class="ap" x1="591" y1="174" x2="591" y2="204" marker-end="url(#f5-p)"/>
+        <line class="ap" x1="687" y1="174" x2="687" y2="204" marker-end="url(#f5-p)"/><line class="ap" x1="783" y1="174" x2="783" y2="204" marker-end="url(#f5-p)"/>
+      </g>
+      <text x="70" y="222" class="cp t-s">south: S_r[t] → row r+1 (row 7이면 VU)</text>
+    </svg>
+    </div>
+    <figcaption>row 하나는 slice 8개 × lane 8개 = N 64 lane입니다. lane n은 자기 w 8개(<span class="m">w[64k+8r+i, n]</span>)를 LRF0–7에 들고 있고, x는 lane과 상관없이 같은 값이 필요합니다. 그래서 Z가 slice 0에서 시작해 <span class="m">east_tgt=src2</span>로 slice마다 동쪽으로 전달됩니다. 부분합은 lane별로 north에서 받아 south로 넘깁니다. FMA 하나가 <span class="m">Σ<sub>i&lt;4</sub> X<sub>i</sub>·Z<sub>i</sub> + Y</span>(ISA의 run_mode N = 4)를 계산합니다.</figcaption>
+  </figure>
+</section>
+
+<!-- 6. VU / SPSU / NCSU -->
+<section>
+  <h2>VU · SPSU · NCSU: 4행 누적, 1행만 저장 <span class="unit">VU → SPSU → SP → NCSU → SHM</span></h2>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 760 196" role="img" aria-label="VU keeps acc t in LRF4 to 7; SPSU stores them to SP 0x419 to 0x41c; NCSU stores only SP 0x419 to SHM 0x110 plus m on the root.">
+      <defs>
+        <marker id="f6-p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hp"/></marker>
+      </defs>
+      <text x="40" y="26" class="t-s">VU: pop(TU) 1번 + (root) pop(SPLU) 3번</text>
+      <rect class="fp" x="40" y="40" width="150" height="24"/><text x="115" y="56" text-anchor="middle">acc[0] · LRF4</text>
+      <rect class="fpad" x="40" y="70" width="150" height="24"/><text x="115" y="86" text-anchor="middle" class="t-mut">acc[1] · LRF5</text>
+      <rect class="fpad" x="40" y="100" width="150" height="24"/><text x="115" y="116" text-anchor="middle" class="t-mut">acc[2] · LRF6</text>
+      <rect class="fpad" x="40" y="130" width="150" height="24"/><text x="115" y="146" text-anchor="middle" class="t-mut">acc[3] · LRF7</text>
+      <line class="ap" x1="190" y1="52" x2="298" y2="52" marker-end="url(#f6-p)"/>
+      <line class="ar" x1="190" y1="82" x2="298" y2="82" marker-end="url(#f6-p)"/>
+      <line class="ar" x1="190" y1="112" x2="298" y2="112" marker-end="url(#f6-p)"/>
+      <line class="ar" x1="190" y1="142" x2="298" y2="142" marker-end="url(#f6-p)"/>
+      <text x="244" y="34" text-anchor="middle" class="t-s">SPSU STU ×4</text>
+      <rect class="fp" x="300" y="40" width="150" height="24"/><text x="375" y="56" text-anchor="middle">SP 0x419</text>
+      <rect class="fpad" x="300" y="70" width="150" height="24"/><text x="375" y="86" text-anchor="middle" class="t-mut">SP 0x41a</text>
+      <rect class="fpad" x="300" y="100" width="150" height="24"/><text x="375" y="116" text-anchor="middle" class="t-mut">SP 0x41b</text>
+      <rect class="fpad" x="300" y="130" width="150" height="24"/><text x="375" y="146" text-anchor="middle" class="t-mut">SP 0x41c</text>
+      <line class="ap" x1="450" y1="52" x2="558" y2="52" marker-end="url(#f6-p)"/>
+      <text x="504" y="44" text-anchor="middle" class="t-s">NCSU STSU</text>
+      <rect class="fp" x="560" y="40" width="180" height="24"/><text x="650" y="56" text-anchor="middle">SHM 0x110 + m</text>
+      <text x="560" y="84" class="t-s t-mut">root: out[m, :]</text>
+      <text x="560" y="100" class="t-s t-mut">leaf: SHM 0x114 + … (root가 읽음)</text>
+      <text x="300" y="178" class="t-s t-mut">0x41a–0x41c (t = 1..3)는 SHM으로 나가지 않음</text>
+    </svg>
+    </div>
+    <figcaption>VU는 TU에서 온 4행을 acc[0..3]에 더합니다. root는 형제 partial 3개를 SPLU로 받아 단계마다 한 번 더 더하고, 매번 SPSU가 같은 SP 줄에 덮어씁니다. NCSU는 마지막에 0x419 한 줄(t = 0)만 SHM에 씁니다.</figcaption>
+  </figure>
+  <pre class="map">VU     acc[t] := S_7[t]  (+ partial(4m+1..3) 순서대로, root만)
+SPSU   SP[0x419 + t] := acc[t]                                   t &lt; 4
+NCSU   SHM[0x110 + m] := SP[0x419]     (root)
+       SHM[0x114 + …] := SP[0x419]     (leaf, root가 gather)</pre>
+</section>
+
+<section>
+  <h2>요약</h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Unit</th><th>Layout</th><th>Affine map</th></tr></thead>
+    <tbody>
+      <tr><td>SP</td><td>한 줄 = 64 lane. w는 K 1개당 1줄, x는 행 1개당 1줄</td><td class="m">SP[0x3d8+q] = w[64k+q, :],  SP[0x418] = x[m, 64k+:64]</td></tr>
+      <tr><td>SPLU / XVU</td><td>줄을 그대로 beat로</td><td class="m">TU.N ← SP[0x3d8+q],  ABSU ← SP[0x418+t]</td></tr>
+      <tr><td>ABSU / AB</td><td>한 줄을 TU row별 영역 8개에 16 B씩</td><td class="m">AB_r[0x10·t + 2i] = beat_t[8r+i]</td></tr>
+      <tr><td>ABLU</td><td>8 B 읽어서 16 B로 복제</td><td class="m">Z = (a, a),  a = beat_t[8r+4h + 0..3]</td></tr>
+      <tr><td>TU row r</td><td>LRF0–7 = w 8줄, LRF8–11 = 행 t별 부분합</td><td class="m">S_r[t] = S_{r-1}[t] + Σ_i w[64k+8r+i, :]·beat_t[8r+i]</td></tr>
+      <tr><td>VU / SPSU</td><td>acc[t] 4행</td><td class="m">SP[0x419+t] = acc[t]</td></tr>
+      <tr><td>NCSU</td><td>t = 0 한 줄만</td><td class="m">SHM[0x110+m] = SP[0x419]</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">ISA 문서로 확인한 것: ABSU STU와 ABLU LDU의 주소 계산(stride를 먼저 더함, bit [9:4]), AB 영역 8 × 1 KB, <span class="m">load_type=1</span> = 8 B, <span class="m">replicate</span> = 16 B로 복제, TU FMA의 4개짜리 내적과 <span class="m">east_tgt</span>. 확인하지 못한 것: ABSU에서 chunk r이 영역 r로 가는 대응, mcc layout에 표시된 K.in 역순(-1)이 FMA의 Z 원소 순서와 어떻게 맞는지.</p>
+</section>
+</main>
+</body>
+</html>
