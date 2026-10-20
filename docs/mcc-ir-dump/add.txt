@@ -1,0 +1,168 @@
+images [896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896]
+
+######## kpl decl.Level body
+(Eltwise(args=(0, 1), op='add', imm=None),)
+
+######## kpl_ir.Graph
+ inputs: (InputNode(name='input1', axes=('R', 'K')), InputNode(name='input2', axes=('R', 'K')))
+   EltwiseOperNode(name='v0', op='add', deps=(InputNode(name='input1', axes=('R', 'K')), InputNode(name='input2', axes=('R', 'K'))))
+
+######## TracedOp.nodes (Expr DAG)
+   input1:in[R,K]
+   input2:in[R,K]
+   add1=add(input1,input2)
+  axes= {'lane': ('R', 'r'), 'reduce': (('K', 'k', 'beat'),)}  cross_dnc= None  unit_data= {'VU': {'dtype': 'dlf16'}}
+
+######## format_tiled
+tiled.trace  streamaddrs  R=1024 K=2        kind=streaming  units=NCLU,NCSU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        input1:[R,K]                                  
+        input2:[R,K]                                  
+        add1 = add(input1, input2)                      → out
+        card  None
+        roles lane=R
+
+  spatial
+        dnc[16] = shard.R[16] × split.K[1]
+
+  temporal
+    LEAF  R=64:lane
+            reduce K[2]   (leaf_K=2)
+
+  accumulate
+        acc_edge None   monoid=add   cadence={'accum': 1, 'npass': 1}   temporal_depth=1
+
+  covers
+        R     shard  leaf 64 × shard_extent 1024                 ✓  shard_extent 1024 vs extent 1024
+        K     plain  leaf 2                                      ✓  leaf 2 vs extent 2
+
+######## Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=1024, count=16, tie_break='first'))
+
+######## StreamPlan / StreamBlock
+chunks=StreamChunks(size=2, n_full=1, tail=0, compute_passes=1) unroll=1 walks=True tail=0 fold_walk=1
+block: passes= [['add1=add(input1,input2)']]
+  {'streamed': ('input1', 'input2'), 'scalars': (), 'shared': (), 'broadcast': (), 'staged': frozenset(), 'collapsed': (), 'K': 2, 'fold': 1, 'ncores': 1, 'stream_passes': 1, 'stream_iters': 1, 'outputs': (('add1', True),), 'units': ('VU',), 'handoffs': (), 'route': Route(loader='SPLU', storer='SPSU')}
+
+######## Mapped op=elementwise op seqs=16 nets=16
+
+######## Mseq[0] (addressed)
+Mseq dnc=0 op=op tensors=('input1', 'input2', 'add1')
+  ranks={'input1': 'streamed', 'input2': 'streamed', 'add1': 'streamed'} grid=() problems={'input1': 32, 'input2': 32, 'add1': 32}
+  Loop[mpass] x1 lines={'input1': 2, 'input2': 2, 'add1': 2} lo=2
+    Pass lo=0 n=2
+      Chunk lo=0 n=2
+        Dma load  input1 shm[1:+2] -> nc0.sp[1:+2]
+        Dma load  input2 shm[35:+2] -> nc0.sp[4:+2]
+        Loop[run] x2 slots={'input1': 1, 'input2': 1, 'add1': 1} tokens={'input1': 1, 'input2': 1, 'add1': 1}
+          Stage SPLU0 input1 sp[1] -> VU toks=input1[0]
+          Stage SPLU0 input2 sp[4] -> VU toks=input2[0]
+          Compute VU0 op=op pop=input1[0],input2[0] push=add1[0] -> SPSU arith=(add1=add(input1,input2))
+          Write SPSU0 add1 sp[7] <- VU toks=add1[0]
+        Dma store add1 shm[69:+2] <- nc0.sp[7:+2]
+  Fence dncs=0..15
+
+######## passes(seqs)
+  VU (add1=add(input1,input2))
+
+######## Mpn[0]
+Mpn dnc=0: 5 processes, 4 channels
+  process NCLU: 4 stmts
+    (0, 0)       Dma load  input1 shm[0:+2] -> nc0.sp[0:+2]
+    (0, 0)       Dma load  input2 shm[0:+2] -> nc0.sp[0:+2]
+    (0, 0)       Put -> SPLU0 tok=0
+    (None, None) Fence dncs=0..15
+  process SPLU0: 5 stmts
+    (0, 0)       Get <- NCLU tok=0
+    (0, 0)       Stage SPLU0 input1 sp[0] -> VU toks=input1[0]
+    (0, 0)       Stage SPLU0 input2 sp[0] -> VU toks=input2[0]
+    (0, 0)       Stage SPLU0 input1 sp[1] -> VU toks=input1[1]
+    (0, 0)       Stage SPLU0 input2 sp[1] -> VU toks=input2[1]
+  process VU0: 2 stmts
+    (0, 0)       Compute VU0 op=op pop=input1[0],input2[0] push=add1[0] -> SPSU arith=(add1=add(input1,input2))
+    (0, 0)       Compute VU0 op=op pop=input1[1],input2[1] push=add1[1] -> SPSU arith=(add1=add(input1,input2))
+  process SPSU0: 3 stmts
+    (0, 0)       Write SPSU0 add1 sp[0] <- VU toks=add1[0]
+    (0, 0)       Write SPSU0 add1 sp[1] <- VU toks=add1[1]
+    (0, 0)       Put -> NCSU tok=0
+  process NCSU: 3 stmts
+    (0, 0)       Get <- SPSU0 tok=0
+    (0, 0)       Dma store add1 shm[0:+2] <- nc0.sp[0:+2]
+    (None, None) Fence dncs=0..15
+  channel SPLU0->VU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('input1', 0), ('input2', 0), ('input1', 1)]
+  channel VU0->SPSU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=2 first=[('add1', 0), ('add1', 1)]
+  channel NCLU->SPLU0 SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[0]
+  channel SPSU0->NCSU SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[0]
+
+######## events (dnc 0)
+  (0, 'NCLU', None) [('load', 2, 0), ('load', 2, 1), ('put', ('splu0',)), ('fence',)] 
+  (0, 'SPLU', 0) [('get', ('nclu',)), ('stage', 1, 'VU', False, 0), ('stage', 1, 'VU', False, 1), ('stage', 1, 'VU', False, 0), ('stage', 1, 'VU', False, 1)] 
+  (0, 'VU', 0) [('pop', 1), ('pop', 1), ('push', 1), ('pop', 1), ('pop', 1), ('push', 1)] 
+  (0, 'SPSU', 0) [('write', 1, 'VU'), ('write', 1, 'VU'), ('put', ('ncsu',))] 
+  (0, 'NCSU', None) [('get', ('spsu0',)), ('store', 2, 0), ('fence',)] 
+
+######## FabricProgram (after fold_templates)
+FabricProgram units=80 schedule_driven=True sp_fan=1 reduces=False reduce_monoid=None mesync=NoneType broadcast=set() cout_spatial=False
+  units: SPSU0@0, SPLU0@0, VU0@0, NCSU@0, NCLU@0, SPSU0@1, SPLU0@1, VU0@1, NCSU@1, NCLU@1, SPSU0@2, SPLU0@2 ...
+  edges[0]: 
+  channel c0 Signal ('NCLU', 0)->('SPLU', 0) peers=() roles=('stage', 'load') gran='' fires={0: 1}
+  channel c1 Signal ('SPSU', 0)->('NCSU', 0) peers=() roles=('egress', 'drain') gran='per_tile' fires={0: 1}
+  channel c2 Signal ('NCLU', 1)->('SPLU', 1) peers=() roles=('stage', 'load') gran='' fires={0: 1}
+  channel c3 Signal ('SPSU', 1)->('NCSU', 1) peers=() roles=('egress', 'drain') gran='per_tile' fires={0: 1}
+  channel c4 Signal ('NCLU', 2)->('SPLU', 2) peers=() roles=('stage', 'load') gran='' fires={0: 1}
+  channel c5 Signal ('SPSU', 2)->('NCSU', 2) peers=() roles=('egress', 'drain') gran='per_tile' fires={0: 1}
+  channel c6 Signal ('NCLU', 3)->('SPLU', 3) peers=() roles=('stage', 'load') gran='' fires={0: 1}
+  channel c7 Signal ('SPSU', 3)->('NCSU', 3) peers=() roles=('egress', 'drain') gran='per_tile' fires={0: 1}
+  channel c8 Signal ('NCLU', 4)->('SPLU', 4) peers=() roles=('stage', 'load') gran='' fires={0: 1}
+  channel c9 Signal ('SPSU', 4)->('NCSU', 4) peers=() roles=('egress', 'drain') gran='per_tile' fires={0: 1}
+  ... (+22 channels)
+
+######## UnitPrograms dnc 0
+UnitProgram SPSU dnc=0 ncore=0 col=2 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[2] lccr_raw[0] framing={'unit_id': 192, 'spr': 16712191, 'lrf_idx': [0, 1], 'footprint': None} fold=None loop=None
+  template (4 top-level nodes):
+    Tmpl MVLOOPCNT {typ1_imm=2}
+    Tmpl STU {src0=0, src1=1, st_producer=2, burst=0, be=1}
+    Tmpl SYNC_ROLE {ref=egress}
+    Tmpl RETURN {be=0}
+UnitProgram SPLU dnc=0 ncore=0 col=3 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[3] lccr_raw[0] framing={'unit_id': 160, 'spr': 16712191, 'lrf_idx': [0, 1, 2], 'footprint': None} fold=None loop=None
+  template (5 top-level nodes):
+    Tmpl SYNC_ROLE {ref=load}
+    Tmpl MVLOOPCNT {typ1_imm=2}
+    Tmpl LDU {src0=0, src1=2, ld_consumer=3, burst=0, be=0}
+    Tmpl LDU {src0=1, src1=2, ld_consumer=3, burst=0, be=1}
+    Tmpl RETURN {be=0}
+UnitProgram VU dnc=0 ncore=0 col=4 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [], 'footprint': None} fold=None loop=None
+  template (6 top-level nodes):
+    Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=16, mode=0, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=17, mode=0, slice_en=255, be=0}
+    Tmpl MVLOOPCNT {typ1_imm=2}
+    Tmpl FMA {src0=4, src1=16, src2=17, lrf_tgt=18, out_sp=0, slice_en=255, be=0}
+    Tmpl FMA {src0=18, src1=16, src2=4, lrf_tgt=0, out_sp=3, slice_en=255, be=1}
+    Tmpl RETURN {be=0}
+UnitProgram NCSU dnc=0 ncore=None col=6 bd={'dnc': 0, 'ncore': None}
+  boundary[0]: 
+  env={}
+  lrf_raw[1] lccr_raw[0] framing={'unit_id': 1024, 'spr': 16712191, 'lrf_idx': [0], 'footprint': None} fold=None loop=None
+  template (3 top-level nodes):
+    Tmpl SYNC_ROLE {ref=drain}
+    Tmpl STMU {src0=0, src1=0, src2=0, src3=0, burst=2}
+    Tmpl RETURN {be=0}
+UnitProgram NCLU dnc=0 ncore=None col=7 bd={'dnc': 0, 'ncore': None}
+  boundary[0]: 
+  env={}
+  lrf_raw[2] lccr_raw[0] framing={'unit_id': 512, 'spr': 16712191, 'lrf_idx': [0, 1], 'footprint': None} fold=None loop=None
+  template (4 top-level nodes):
+    Tmpl LDMU {src0=0, src1=0, src2=0, src3=0, burst=2}
+    Tmpl LDMU {src0=1, src1=1, src2=1, src3=1, burst=2}
+    Tmpl SYNC_ROLE {ref=stage}
+    Tmpl RETURN {be=0}

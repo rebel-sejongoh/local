@@ -1,0 +1,1024 @@
+images [9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472, 9472]
+
+######## kpl decl.Level body
+(Contract(args=(0, 1)),)
+
+######## kpl_ir.Graph
+ inputs: (InputNode(name='input', axes=('M', 'K')), InputNode(name='kernel', axes=('K', 'N')))
+   ContractOperNode(name='v0', lhs=InputNode(name='input', axes=('M', 'K')), rhs=InputNode(name='kernel', axes=('K', 'N')))
+
+######## TracedOp.nodes (Expr DAG)
+   x:in[M,K]
+   w:in[K,N]
+   mul1=mul(x,w)
+   y=reduce.add[K](mul1)
+  axes= {'lane': ('N', 'n'), 'shard': ('M', 'm'), 'contract': ('K', 'k')}  cross_dnc= gather  unit_data= {'VU': {'dtype': 'dlf16'}}
+
+######## format_tiled
+tiled.trace  _systolic  N=64 M=128 K=64        kind=systolic  units=ABLU,ABSU,NCLU,NCSU,TU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        x:[M,K]                                       
+        w:[K,N]                                       
+        mul1 = mul(x, w)                              
+        y = reduce.add(mul1)                            → out
+        card  ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west')
+        roles lane=N  shard=M  contract=K
+
+  spatial
+        dnc[16] = shard.M[16] × split.K.beat[1]
+        ncore[2]  (within each dnc)
+
+  temporal
+    loop K.bin[1]   (degenerate)
+      LEAF  N=64:lane · M=4:line
+              reduce K.col[8] × K.beat[8]   (leaf_K=64)
+
+  buffers
+        SP:kernel     w    @NCLU
+        SP:ab_bank    x    @NCLU
+        SP:tu_psum    y    @TU
+        SP:vu_acc     acc  @VU
+
+  accumulate
+        acc_edge None   monoid=add   cadence={'accum': 1, 'npass': 1}   temporal_depth=1
+
+  covers
+        N     lane   leaf 64  (whole-tensor) × laneblk 1         ✓  laneblk 1 × 1 N slices × lane_width 64 brackets extent 64? (expected ceil(64/64)=1)
+        M     shard  leaf 4 × shard_extent 128                   ✓  shard_extent 128 vs extent 128
+        K     split  leaf 64 × split 1 × bin 1                   ✓  reduce_size 1 × atom 64 × bin 1 = 64, extent 64
+
+######## Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=128, count=16, tie_break='first'))
+
+######## Mapped op=matmul seqs=16 nets=16
+
+######## Mseq[0] (addressed)
+Mseq dnc=0 op=matmul tensors=('x', 'w', 'y')
+  ranks={} grid=(('M', 16, 0),) problems={}
+  Pass lo=0 n=0
+    Chunk lo=0 n=0
+      Dma load  w shm[130:+64] -> nc0.sp[984:+64]
+      Loop[run] x2 slots={'w': 0} tokens={'w': (0, 0, 1), 'wp': (0, 0, 1)} ncs=1
+        Stage SPLU0 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+61
+        Loop[run] x64 tokens={'w': 1}
+          Compute XVU0 op=pass pop=w[0, 0, 0] push=w[0, 0, 0] -> TU:0 arith=()
+        Compute TU:00 op=tu_prime pop=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x56 tokens={'w': 1}
+          Compute TU:00 op=pass pop=w[8, 0, 0] push=w[8, 0, 0] -> TU:1 arith=()
+        Compute TU:10 op=tu_prime pop=w[8, 0, 0],w[9, 0, 0],w[10, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x48 tokens={'w': 1}
+          Compute TU:10 op=pass pop=w[16, 0, 0] push=w[16, 0, 0] -> TU:2 arith=()
+        Compute TU:20 op=tu_prime pop=w[16, 0, 0],w[17, 0, 0],w[18, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x40 tokens={'w': 1}
+          Compute TU:20 op=pass pop=w[24, 0, 0] push=w[24, 0, 0] -> TU:3 arith=()
+        Compute TU:30 op=tu_prime pop=w[24, 0, 0],w[25, 0, 0],w[26, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x32 tokens={'w': 1}
+          Compute TU:30 op=pass pop=w[32, 0, 0] push=w[32, 0, 0] -> TU:4 arith=()
+        Compute TU:40 op=tu_prime pop=w[32, 0, 0],w[33, 0, 0],w[34, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x24 tokens={'w': 1}
+          Compute TU:40 op=pass pop=w[40, 0, 0] push=w[40, 0, 0] -> TU:5 arith=()
+        Compute TU:50 op=tu_prime pop=w[40, 0, 0],w[41, 0, 0],w[42, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x16 tokens={'w': 1}
+          Compute TU:50 op=pass pop=w[48, 0, 0] push=w[48, 0, 0] -> TU:6 arith=()
+        Compute TU:60 op=tu_prime pop=w[48, 0, 0],w[49, 0, 0],w[50, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x8 tokens={'w': 1}
+          Compute TU:60 op=pass pop=w[56, 0, 0] push=w[56, 0, 0] -> TU:7 arith=()
+        Compute TU:70 op=tu_prime pop=w[56, 0, 0],w[57, 0, 0],w[58, 0, 0],..+5 push= -> None arith=()
+    Chunk lo=0 n=0
+      Loop[run] x8 lines={'x': 1} slots={'x': 1}
+        Dma load  x shm[1:+1] -> nc0.sp[1048:+1]
+      Loop[run] x2 slots={'x': 4} tokens={('x', 'pad'): (0, 0, 1, 0, 0), 'x': (4, 0, 0)} ncs=1
+        Stage SPLU0 x sp[1048, 1049, 1050, 1051] -> XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+        Loop[run] x4 tokens={'x': 1}
+          Compute XVU0 op=pass pop=x[0, 0, 0] push=x[0, 0, 0] -> ABSU arith=()
+        Write ABSU0 a sp[0, 1, 2, 3] <- XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+    Chunk lo=0 n=0
+      Loop[run] x2 slots={'y': 4} tokens={'a': (0, 0, (0, 0, 1, 0)), 't': (0, 0, (0, 0, 1, 0)), 's': (0, (0, 0, 1, 0)), 'p': ((0, 0, 1, 0),)} ncs=1
+        Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 lanes=(0, 4)
+        Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 lanes=(4, 4)
+        Compute TU:00 op=tu_mac pop=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute TU:00 op=tu_drain pop=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 push=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+1 -> TU:1 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Loop[run] x6 tokens={'a': 1, 't': 1} rows=1
+          Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 0],a[1, 0, (0, 0, 0, 1), 0],a[1, 0, (0, 0, 0, 2), 0],..+1 lanes=(8, 4)
+          Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 lanes=(12, 4)
+          Compute TU:10 op=tu_mac pop=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+          Compute TU:10 op=tu_drain pop=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 push=t[1, 0, (0, 0, 0, 0)],t[1, 0, (0, 0, 0, 1)],t[1, 0, (0, 0, 0, 2)],..+1 -> TU:2 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 0],a[7, 0, (0, 0, 0, 1), 0],a[7, 0, (0, 0, 0, 2), 0],..+1 lanes=(56, 4)
+        Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 lanes=(60, 4)
+        Compute TU:70 op=tu_mac pop=t[6, 0, (0, 0, 0, 0)],t[6, 0, (0, 0, 0, 1)],t[6, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute TU:70 op=tu_drain pop=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 push=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute VU0 op=accumulate pop=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 push=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1 -> SPSU arith=()
+        Write SPSU0 y sp[1056, 1057, 1058, 1059] <- VU toks=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1
+    Chunk lo=0 n=0
+      Loop[run] x8 lines={'y': 1} slots={'y': 1}
+        Dma store y shm[197:+1] <- nc0.sp[1056:+1]
+  Fence dncs=0..15
+
+######## passes(seqs)
+  TU (ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'),)
+
+######## Mpn[0]
+Mpn dnc=0: 44 processes, 60 channels
+  process NCLU: 14 stmts
+    (0, 0)       Dma load  w shm[128:+64] -> nc0.sp[984:+64]
+    (0, 0)       Put -> SPLU0 tok=0
+    (0, 0)       Put -> SPLU1 tok=0
+    (0, 1)       Dma load  x shm[0:+1] -> nc0.sp[1048:+1]
+    (0, 1)       Dma load  x shm[1:+1] -> nc0.sp[1049:+1]
+    (0, 1)       Dma load  x shm[2:+1] -> nc0.sp[1050:+1]
+    (0, 1)       Dma load  x shm[3:+1] -> nc0.sp[1051:+1]
+    (0, 1)       Dma load  x shm[4:+1] -> nc0.sp[1052:+1]
+    ... (+6)
+  process SPLU0: 4 stmts
+    (0, 0)       Get <- NCLU tok=0
+    (0, 0)       Stage SPLU0 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+61
+    (0, 1)       Get <- NCLU tok=1
+    (0, 1)       Stage SPLU0 x sp[1048, 1049, 1050, 1051] -> XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+  process XVU0: 68 stmts
+    (0, 0)       Compute XVU0 op=pass pop=w[0, 0, 0] push=w[0, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[1, 0, 0] push=w[1, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[2, 0, 0] push=w[2, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[3, 0, 0] push=w[3, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[4, 0, 0] push=w[4, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[5, 0, 0] push=w[5, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[6, 0, 0] push=w[6, 0, 0] -> TU:0 arith=()
+    (0, 0)       Compute XVU0 op=pass pop=w[7, 0, 0] push=w[7, 0, 0] -> TU:0 arith=()
+    ... (+60)
+  process ABSU0: 9 stmts
+    (0, 1)       Write ABSU0 a sp[0, 1, 2, 3] <- XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+    (0, 1)       Put -> ABLU0:0 tok=1
+    (0, 1)       Put -> ABLU0:1 tok=1
+    (0, 1)       Put -> ABLU0:2 tok=1
+    (0, 1)       Put -> ABLU0:3 tok=1
+    (0, 1)       Put -> ABLU0:4 tok=1
+    (0, 1)       Put -> ABLU0:5 tok=1
+    (0, 1)       Put -> ABLU0:6 tok=1
+    ... (+1)
+  process ABLU0:0: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 lanes=(0, 4)
+    (0, 2)       Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 lanes=(4, 4)
+  process ABLU0:1: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 0],a[1, 0, (0, 0, 0, 1), 0],a[1, 0, (0, 0, 0, 2), 0],..+1 lanes=(8, 4)
+    (0, 2)       Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 lanes=(12, 4)
+  process ABLU0:2: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:20 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 0, 0), 0],a[2, 0, (0, 0, 0, 1), 0],a[2, 0, (0, 0, 0, 2), 0],..+1 lanes=(16, 4)
+    (0, 2)       Stage ABLU:20 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 0, 0), 1],a[2, 0, (0, 0, 0, 1), 1],a[2, 0, (0, 0, 0, 2), 1],..+1 lanes=(20, 4)
+  process ABLU0:3: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:30 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 0, 0), 0],a[3, 0, (0, 0, 0, 1), 0],a[3, 0, (0, 0, 0, 2), 0],..+1 lanes=(24, 4)
+    (0, 2)       Stage ABLU:30 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 0, 0), 1],a[3, 0, (0, 0, 0, 1), 1],a[3, 0, (0, 0, 0, 2), 1],..+1 lanes=(28, 4)
+  process ABLU0:4: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:40 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 0, 0), 0],a[4, 0, (0, 0, 0, 1), 0],a[4, 0, (0, 0, 0, 2), 0],..+1 lanes=(32, 4)
+    (0, 2)       Stage ABLU:40 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 0, 0), 1],a[4, 0, (0, 0, 0, 1), 1],a[4, 0, (0, 0, 0, 2), 1],..+1 lanes=(36, 4)
+  process ABLU0:5: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:50 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 0, 0), 0],a[5, 0, (0, 0, 0, 1), 0],a[5, 0, (0, 0, 0, 2), 0],..+1 lanes=(40, 4)
+    (0, 2)       Stage ABLU:50 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 0, 0), 1],a[5, 0, (0, 0, 0, 1), 1],a[5, 0, (0, 0, 0, 2), 1],..+1 lanes=(44, 4)
+  process ABLU0:6: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:60 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 0, 0), 0],a[6, 0, (0, 0, 0, 1), 0],a[6, 0, (0, 0, 0, 2), 0],..+1 lanes=(48, 4)
+    (0, 2)       Stage ABLU:60 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 0, 0), 1],a[6, 0, (0, 0, 0, 1), 1],a[6, 0, (0, 0, 0, 2), 1],..+1 lanes=(52, 4)
+  process ABLU0:7: 3 stmts
+    (0, 2)       Get <- ABSU0 tok=1
+    (0, 2)       Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 0],a[7, 0, (0, 0, 0, 1), 0],a[7, 0, (0, 0, 0, 2), 0],..+1 lanes=(56, 4)
+    (0, 2)       Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 lanes=(60, 4)
+  process TU0:0: 59 stmts
+    (0, 0)       Compute TU:00 op=tu_prime pop=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[8, 0, 0] push=w[8, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[9, 0, 0] push=w[9, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[10, 0, 0] push=w[10, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[11, 0, 0] push=w[11, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[12, 0, 0] push=w[12, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[13, 0, 0] push=w[13, 0, 0] -> TU:1 arith=()
+    (0, 0)       Compute TU:00 op=pass pop=w[14, 0, 0] push=w[14, 0, 0] -> TU:1 arith=()
+    ... (+51)
+  process TU0:1: 51 stmts
+    (0, 0)       Compute TU:10 op=tu_prime pop=w[8, 0, 0],w[9, 0, 0],w[10, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[16, 0, 0] push=w[16, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[17, 0, 0] push=w[17, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[18, 0, 0] push=w[18, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[19, 0, 0] push=w[19, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[20, 0, 0] push=w[20, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[21, 0, 0] push=w[21, 0, 0] -> TU:2 arith=()
+    (0, 0)       Compute TU:10 op=pass pop=w[22, 0, 0] push=w[22, 0, 0] -> TU:2 arith=()
+    ... (+43)
+  process TU0:2: 43 stmts
+    (0, 0)       Compute TU:20 op=tu_prime pop=w[16, 0, 0],w[17, 0, 0],w[18, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[24, 0, 0] push=w[24, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[25, 0, 0] push=w[25, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[26, 0, 0] push=w[26, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[27, 0, 0] push=w[27, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[28, 0, 0] push=w[28, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[29, 0, 0] push=w[29, 0, 0] -> TU:3 arith=()
+    (0, 0)       Compute TU:20 op=pass pop=w[30, 0, 0] push=w[30, 0, 0] -> TU:3 arith=()
+    ... (+35)
+  process TU0:3: 35 stmts
+    (0, 0)       Compute TU:30 op=tu_prime pop=w[24, 0, 0],w[25, 0, 0],w[26, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[32, 0, 0] push=w[32, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[33, 0, 0] push=w[33, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[34, 0, 0] push=w[34, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[35, 0, 0] push=w[35, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[36, 0, 0] push=w[36, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[37, 0, 0] push=w[37, 0, 0] -> TU:4 arith=()
+    (0, 0)       Compute TU:30 op=pass pop=w[38, 0, 0] push=w[38, 0, 0] -> TU:4 arith=()
+    ... (+27)
+  process TU0:4: 27 stmts
+    (0, 0)       Compute TU:40 op=tu_prime pop=w[32, 0, 0],w[33, 0, 0],w[34, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[40, 0, 0] push=w[40, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[41, 0, 0] push=w[41, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[42, 0, 0] push=w[42, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[43, 0, 0] push=w[43, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[44, 0, 0] push=w[44, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[45, 0, 0] push=w[45, 0, 0] -> TU:5 arith=()
+    (0, 0)       Compute TU:40 op=pass pop=w[46, 0, 0] push=w[46, 0, 0] -> TU:5 arith=()
+    ... (+19)
+  process TU0:5: 19 stmts
+    (0, 0)       Compute TU:50 op=tu_prime pop=w[40, 0, 0],w[41, 0, 0],w[42, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[48, 0, 0] push=w[48, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[49, 0, 0] push=w[49, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[50, 0, 0] push=w[50, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[51, 0, 0] push=w[51, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[52, 0, 0] push=w[52, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[53, 0, 0] push=w[53, 0, 0] -> TU:6 arith=()
+    (0, 0)       Compute TU:50 op=pass pop=w[54, 0, 0] push=w[54, 0, 0] -> TU:6 arith=()
+    ... (+11)
+  process TU0:6: 11 stmts
+    (0, 0)       Compute TU:60 op=tu_prime pop=w[48, 0, 0],w[49, 0, 0],w[50, 0, 0],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[56, 0, 0] push=w[56, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[57, 0, 0] push=w[57, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[58, 0, 0] push=w[58, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[59, 0, 0] push=w[59, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[60, 0, 0] push=w[60, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[61, 0, 0] push=w[61, 0, 0] -> TU:7 arith=()
+    (0, 0)       Compute TU:60 op=pass pop=w[62, 0, 0] push=w[62, 0, 0] -> TU:7 arith=()
+    ... (+3)
+  process TU0:7: 3 stmts
+    (0, 0)       Compute TU:70 op=tu_prime pop=w[56, 0, 0],w[57, 0, 0],w[58, 0, 0],..+5 push= -> None arith=()
+    (0, 2)       Compute TU:70 op=tu_mac pop=t[6, 0, (0, 0, 0, 0)],t[6, 0, (0, 0, 0, 1)],t[6, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+    (0, 2)       Compute TU:70 op=tu_drain pop=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 push=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  process VU0: 1 stmts
+    (0, 2)       Compute VU0 op=accumulate pop=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 push=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1 -> SPSU arith=()
+  process SPSU0: 2 stmts
+    (0, 2)       Write SPSU0 y sp[1056, 1057, 1058, 1059] <- VU toks=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1
+    (0, 2)       Put -> NCSU tok=2
+  process SPLU1: 4 stmts
+    (0, 0)       Get <- NCLU tok=0
+    (0, 0)       Stage SPLU1 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 1],w[1, 0, 1],w[2, 0, 1],..+61
+    (0, 1)       Get <- NCLU tok=1
+    (0, 1)       Stage SPLU1 x sp[1052, 1053, 1054, 1055] -> XVU toks=x[4, 0, 0],x[5, 0, 0],x[6, 0, 0],..+1
+  process XVU1: 68 stmts
+    (0, 0)       Compute XVU1 op=pass pop=w[0, 0, 1] push=w[0, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[1, 0, 1] push=w[1, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[2, 0, 1] push=w[2, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[3, 0, 1] push=w[3, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[4, 0, 1] push=w[4, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[5, 0, 1] push=w[5, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[6, 0, 1] push=w[6, 0, 1] -> TU:0 arith=()
+    (0, 0)       Compute XVU1 op=pass pop=w[7, 0, 1] push=w[7, 0, 1] -> TU:0 arith=()
+    ... (+60)
+  process ABSU1: 9 stmts
+    (0, 1)       Write ABSU1 a sp[0, 1, 2, 3] <- XVU toks=x[4, 0, 0],x[5, 0, 0],x[6, 0, 0],..+1
+    (0, 1)       Put -> ABLU1:0 tok=1
+    (0, 1)       Put -> ABLU1:1 tok=1
+    (0, 1)       Put -> ABLU1:2 tok=1
+    (0, 1)       Put -> ABLU1:3 tok=1
+    (0, 1)       Put -> ABLU1:4 tok=1
+    (0, 1)       Put -> ABLU1:5 tok=1
+    (0, 1)       Put -> ABLU1:6 tok=1
+    ... (+1)
+  process ABLU1:0: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:01 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 1, 0), 0],a[0, 0, (0, 0, 1, 1), 0],a[0, 0, (0, 0, 1, 2), 0],..+1 lanes=(0, 4)
+    (0, 2)       Stage ABLU:01 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 1, 0), 1],a[0, 0, (0, 0, 1, 1), 1],a[0, 0, (0, 0, 1, 2), 1],..+1 lanes=(4, 4)
+  process ABLU1:1: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:11 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 1, 0), 0],a[1, 0, (0, 0, 1, 1), 0],a[1, 0, (0, 0, 1, 2), 0],..+1 lanes=(8, 4)
+    (0, 2)       Stage ABLU:11 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 1, 0), 1],a[1, 0, (0, 0, 1, 1), 1],a[1, 0, (0, 0, 1, 2), 1],..+1 lanes=(12, 4)
+  process ABLU1:2: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:21 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 1, 0), 0],a[2, 0, (0, 0, 1, 1), 0],a[2, 0, (0, 0, 1, 2), 0],..+1 lanes=(16, 4)
+    (0, 2)       Stage ABLU:21 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 1, 0), 1],a[2, 0, (0, 0, 1, 1), 1],a[2, 0, (0, 0, 1, 2), 1],..+1 lanes=(20, 4)
+  process ABLU1:3: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:31 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 1, 0), 0],a[3, 0, (0, 0, 1, 1), 0],a[3, 0, (0, 0, 1, 2), 0],..+1 lanes=(24, 4)
+    (0, 2)       Stage ABLU:31 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 1, 0), 1],a[3, 0, (0, 0, 1, 1), 1],a[3, 0, (0, 0, 1, 2), 1],..+1 lanes=(28, 4)
+  process ABLU1:4: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:41 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 1, 0), 0],a[4, 0, (0, 0, 1, 1), 0],a[4, 0, (0, 0, 1, 2), 0],..+1 lanes=(32, 4)
+    (0, 2)       Stage ABLU:41 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 1, 0), 1],a[4, 0, (0, 0, 1, 1), 1],a[4, 0, (0, 0, 1, 2), 1],..+1 lanes=(36, 4)
+  process ABLU1:5: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:51 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 1, 0), 0],a[5, 0, (0, 0, 1, 1), 0],a[5, 0, (0, 0, 1, 2), 0],..+1 lanes=(40, 4)
+    (0, 2)       Stage ABLU:51 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 1, 0), 1],a[5, 0, (0, 0, 1, 1), 1],a[5, 0, (0, 0, 1, 2), 1],..+1 lanes=(44, 4)
+  process ABLU1:6: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:61 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 1, 0), 0],a[6, 0, (0, 0, 1, 1), 0],a[6, 0, (0, 0, 1, 2), 0],..+1 lanes=(48, 4)
+    (0, 2)       Stage ABLU:61 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 1, 0), 1],a[6, 0, (0, 0, 1, 1), 1],a[6, 0, (0, 0, 1, 2), 1],..+1 lanes=(52, 4)
+  process ABLU1:7: 3 stmts
+    (0, 2)       Get <- ABSU1 tok=1
+    (0, 2)       Stage ABLU:71 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 1, 0), 0],a[7, 0, (0, 0, 1, 1), 0],a[7, 0, (0, 0, 1, 2), 0],..+1 lanes=(56, 4)
+    (0, 2)       Stage ABLU:71 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 1, 0), 1],a[7, 0, (0, 0, 1, 1), 1],a[7, 0, (0, 0, 1, 2), 1],..+1 lanes=(60, 4)
+  process TU1:0: 59 stmts
+    (0, 0)       Compute TU:01 op=tu_prime pop=w[0, 0, 1],w[1, 0, 1],w[2, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[8, 0, 1] push=w[8, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[9, 0, 1] push=w[9, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[10, 0, 1] push=w[10, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[11, 0, 1] push=w[11, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[12, 0, 1] push=w[12, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[13, 0, 1] push=w[13, 0, 1] -> TU:1 arith=()
+    (0, 0)       Compute TU:01 op=pass pop=w[14, 0, 1] push=w[14, 0, 1] -> TU:1 arith=()
+    ... (+51)
+  process TU1:1: 51 stmts
+    (0, 0)       Compute TU:11 op=tu_prime pop=w[8, 0, 1],w[9, 0, 1],w[10, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[16, 0, 1] push=w[16, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[17, 0, 1] push=w[17, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[18, 0, 1] push=w[18, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[19, 0, 1] push=w[19, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[20, 0, 1] push=w[20, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[21, 0, 1] push=w[21, 0, 1] -> TU:2 arith=()
+    (0, 0)       Compute TU:11 op=pass pop=w[22, 0, 1] push=w[22, 0, 1] -> TU:2 arith=()
+    ... (+43)
+  process TU1:2: 43 stmts
+    (0, 0)       Compute TU:21 op=tu_prime pop=w[16, 0, 1],w[17, 0, 1],w[18, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[24, 0, 1] push=w[24, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[25, 0, 1] push=w[25, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[26, 0, 1] push=w[26, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[27, 0, 1] push=w[27, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[28, 0, 1] push=w[28, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[29, 0, 1] push=w[29, 0, 1] -> TU:3 arith=()
+    (0, 0)       Compute TU:21 op=pass pop=w[30, 0, 1] push=w[30, 0, 1] -> TU:3 arith=()
+    ... (+35)
+  process TU1:3: 35 stmts
+    (0, 0)       Compute TU:31 op=tu_prime pop=w[24, 0, 1],w[25, 0, 1],w[26, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[32, 0, 1] push=w[32, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[33, 0, 1] push=w[33, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[34, 0, 1] push=w[34, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[35, 0, 1] push=w[35, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[36, 0, 1] push=w[36, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[37, 0, 1] push=w[37, 0, 1] -> TU:4 arith=()
+    (0, 0)       Compute TU:31 op=pass pop=w[38, 0, 1] push=w[38, 0, 1] -> TU:4 arith=()
+    ... (+27)
+  process TU1:4: 27 stmts
+    (0, 0)       Compute TU:41 op=tu_prime pop=w[32, 0, 1],w[33, 0, 1],w[34, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[40, 0, 1] push=w[40, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[41, 0, 1] push=w[41, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[42, 0, 1] push=w[42, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[43, 0, 1] push=w[43, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[44, 0, 1] push=w[44, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[45, 0, 1] push=w[45, 0, 1] -> TU:5 arith=()
+    (0, 0)       Compute TU:41 op=pass pop=w[46, 0, 1] push=w[46, 0, 1] -> TU:5 arith=()
+    ... (+19)
+  process TU1:5: 19 stmts
+    (0, 0)       Compute TU:51 op=tu_prime pop=w[40, 0, 1],w[41, 0, 1],w[42, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[48, 0, 1] push=w[48, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[49, 0, 1] push=w[49, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[50, 0, 1] push=w[50, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[51, 0, 1] push=w[51, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[52, 0, 1] push=w[52, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[53, 0, 1] push=w[53, 0, 1] -> TU:6 arith=()
+    (0, 0)       Compute TU:51 op=pass pop=w[54, 0, 1] push=w[54, 0, 1] -> TU:6 arith=()
+    ... (+11)
+  process TU1:6: 11 stmts
+    (0, 0)       Compute TU:61 op=tu_prime pop=w[48, 0, 1],w[49, 0, 1],w[50, 0, 1],..+5 push= -> None arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[56, 0, 1] push=w[56, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[57, 0, 1] push=w[57, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[58, 0, 1] push=w[58, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[59, 0, 1] push=w[59, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[60, 0, 1] push=w[60, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[61, 0, 1] push=w[61, 0, 1] -> TU:7 arith=()
+    (0, 0)       Compute TU:61 op=pass pop=w[62, 0, 1] push=w[62, 0, 1] -> TU:7 arith=()
+    ... (+3)
+  process TU1:7: 3 stmts
+    (0, 0)       Compute TU:71 op=tu_prime pop=w[56, 0, 1],w[57, 0, 1],w[58, 0, 1],..+5 push= -> None arith=()
+    (0, 2)       Compute TU:71 op=tu_mac pop=t[6, 0, (0, 0, 1, 0)],t[6, 0, (0, 0, 1, 1)],t[6, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+    (0, 2)       Compute TU:71 op=tu_drain pop=a[7, 0, (0, 0, 1, 0), 1],a[7, 0, (0, 0, 1, 1), 1],a[7, 0, (0, 0, 1, 2), 1],..+1 push=t[7, 0, (0, 0, 1, 0)],t[7, 0, (0, 0, 1, 1)],t[7, 0, (0, 0, 1, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  process VU1: 1 stmts
+    (0, 2)       Compute VU1 op=accumulate pop=t[7, 0, (0, 0, 1, 0)],t[7, 0, (0, 0, 1, 1)],t[7, 0, (0, 0, 1, 2)],..+1 push=s[0, (0, 0, 1, 0)],s[0, (0, 0, 1, 1)],s[0, (0, 0, 1, 2)],..+1 -> SPSU arith=()
+  process SPSU1: 2 stmts
+    (0, 2)       Write SPSU1 y sp[1060, 1061, 1062, 1063] <- VU toks=s[0, (0, 0, 1, 0)],s[0, (0, 0, 1, 1)],s[0, (0, 0, 1, 2)],..+1
+    (0, 2)       Put -> NCSU tok=2
+  process NCSU: 11 stmts
+    (0, 3)       Get <- SPSU0 tok=2
+    (0, 3)       Get <- SPSU1 tok=2
+    (0, 3)       Dma store y shm[192:+1] <- nc0.sp[1056:+1]
+    (0, 3)       Dma store y shm[193:+1] <- nc0.sp[1057:+1]
+    (0, 3)       Dma store y shm[194:+1] <- nc0.sp[1058:+1]
+    (0, 3)       Dma store y shm[195:+1] <- nc0.sp[1059:+1]
+    (0, 3)       Dma store y shm[196:+1] <- nc0.sp[1060:+1]
+    (0, 3)       Dma store y shm[197:+1] <- nc0.sp[1061:+1]
+    ... (+3)
+  channel SPLU0->XVU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=68 first=[('w', 0, 0, 0), ('w', 1, 0, 0), ('w', 2, 0, 0)]
+  channel XVU0->TU0:0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=64 first=[('w', 0, 0, 0), ('w', 1, 0, 0), ('w', 2, 0, 0)]
+  channel TU0:0->TU0:1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=60 first=[('w', 8, 0, 0), ('w', 9, 0, 0), ('w', 10, 0, 0)]
+  channel TU0:1->TU0:2 FIFO/backpressure cap=None depth=None in_flight=0 tokens=52 first=[('w', 16, 0, 0), ('w', 17, 0, 0), ('w', 18, 0, 0)]
+  channel TU0:2->TU0:3 FIFO/backpressure cap=None depth=None in_flight=0 tokens=44 first=[('w', 24, 0, 0), ('w', 25, 0, 0), ('w', 26, 0, 0)]
+  channel TU0:3->TU0:4 FIFO/backpressure cap=None depth=None in_flight=0 tokens=36 first=[('w', 32, 0, 0), ('w', 33, 0, 0), ('w', 34, 0, 0)]
+  channel TU0:4->TU0:5 FIFO/backpressure cap=None depth=None in_flight=0 tokens=28 first=[('w', 40, 0, 0), ('w', 41, 0, 0), ('w', 42, 0, 0)]
+  channel TU0:5->TU0:6 FIFO/backpressure cap=None depth=None in_flight=0 tokens=20 first=[('w', 48, 0, 0), ('w', 49, 0, 0), ('w', 50, 0, 0)]
+  channel TU0:6->TU0:7 FIFO/backpressure cap=None depth=None in_flight=0 tokens=12 first=[('w', 56, 0, 0), ('w', 57, 0, 0), ('w', 58, 0, 0)]
+  channel SPLU1->XVU1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=68 first=[('w', 0, 0, 1), ('w', 1, 0, 1), ('w', 2, 0, 1)]
+  channel XVU1->TU1:0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=64 first=[('w', 0, 0, 1), ('w', 1, 0, 1), ('w', 2, 0, 1)]
+  channel TU1:0->TU1:1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=60 first=[('w', 8, 0, 1), ('w', 9, 0, 1), ('w', 10, 0, 1)]
+  channel TU1:1->TU1:2 FIFO/backpressure cap=None depth=None in_flight=0 tokens=52 first=[('w', 16, 0, 1), ('w', 17, 0, 1), ('w', 18, 0, 1)]
+  channel TU1:2->TU1:3 FIFO/backpressure cap=None depth=None in_flight=0 tokens=44 first=[('w', 24, 0, 1), ('w', 25, 0, 1), ('w', 26, 0, 1)]
+  channel TU1:3->TU1:4 FIFO/backpressure cap=None depth=None in_flight=0 tokens=36 first=[('w', 32, 0, 1), ('w', 33, 0, 1), ('w', 34, 0, 1)]
+  channel TU1:4->TU1:5 FIFO/backpressure cap=None depth=None in_flight=0 tokens=28 first=[('w', 40, 0, 1), ('w', 41, 0, 1), ('w', 42, 0, 1)]
+  channel TU1:5->TU1:6 FIFO/backpressure cap=None depth=None in_flight=0 tokens=20 first=[('w', 48, 0, 1), ('w', 49, 0, 1), ('w', 50, 0, 1)]
+  channel TU1:6->TU1:7 FIFO/backpressure cap=None depth=None in_flight=0 tokens=12 first=[('w', 56, 0, 1), ('w', 57, 0, 1), ('w', 58, 0, 1)]
+  channel XVU0->ABSU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('x', 0, 0, 0), ('x', 1, 0, 0), ('x', 2, 0, 0)]
+  channel XVU1->ABSU1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('x', 4, 0, 0), ('x', 5, 0, 0), ('x', 6, 0, 0)]
+  channel ABLU0:0->TU0:0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 0, 0, (0, 0, 0, 0), 0), ('a', 0, 0, (0, 0, 0, 1), 0), ('a', 0, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:1->TU0:1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 1, 0, (0, 0, 0, 0), 0), ('a', 1, 0, (0, 0, 0, 1), 0), ('a', 1, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:2->TU0:2 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 2, 0, (0, 0, 0, 0), 0), ('a', 2, 0, (0, 0, 0, 1), 0), ('a', 2, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:3->TU0:3 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 3, 0, (0, 0, 0, 0), 0), ('a', 3, 0, (0, 0, 0, 1), 0), ('a', 3, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:4->TU0:4 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 4, 0, (0, 0, 0, 0), 0), ('a', 4, 0, (0, 0, 0, 1), 0), ('a', 4, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:5->TU0:5 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 5, 0, (0, 0, 0, 0), 0), ('a', 5, 0, (0, 0, 0, 1), 0), ('a', 5, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:6->TU0:6 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 6, 0, (0, 0, 0, 0), 0), ('a', 6, 0, (0, 0, 0, 1), 0), ('a', 6, 0, (0, 0, 0, 2), 0)]
+  channel ABLU0:7->TU0:7 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 7, 0, (0, 0, 0, 0), 0), ('a', 7, 0, (0, 0, 0, 1), 0), ('a', 7, 0, (0, 0, 0, 2), 0)]
+  channel TU0:7->VU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('t', 7, 0, (0, 0, 0, 0)), ('t', 7, 0, (0, 0, 0, 1)), ('t', 7, 0, (0, 0, 0, 2))]
+  channel VU0->SPSU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('s', 0, (0, 0, 0, 0)), ('s', 0, (0, 0, 0, 1)), ('s', 0, (0, 0, 0, 2))]
+  channel ABLU1:0->TU1:0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 0, 0, (0, 0, 1, 0), 0), ('a', 0, 0, (0, 0, 1, 1), 0), ('a', 0, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:1->TU1:1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 1, 0, (0, 0, 1, 0), 0), ('a', 1, 0, (0, 0, 1, 1), 0), ('a', 1, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:2->TU1:2 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 2, 0, (0, 0, 1, 0), 0), ('a', 2, 0, (0, 0, 1, 1), 0), ('a', 2, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:3->TU1:3 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 3, 0, (0, 0, 1, 0), 0), ('a', 3, 0, (0, 0, 1, 1), 0), ('a', 3, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:4->TU1:4 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 4, 0, (0, 0, 1, 0), 0), ('a', 4, 0, (0, 0, 1, 1), 0), ('a', 4, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:5->TU1:5 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 5, 0, (0, 0, 1, 0), 0), ('a', 5, 0, (0, 0, 1, 1), 0), ('a', 5, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:6->TU1:6 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 6, 0, (0, 0, 1, 0), 0), ('a', 6, 0, (0, 0, 1, 1), 0), ('a', 6, 0, (0, 0, 1, 2), 0)]
+  channel ABLU1:7->TU1:7 FIFO/backpressure cap=None depth=None in_flight=0 tokens=8 first=[('a', 7, 0, (0, 0, 1, 0), 0), ('a', 7, 0, (0, 0, 1, 1), 0), ('a', 7, 0, (0, 0, 1, 2), 0)]
+  channel TU1:7->VU1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('t', 7, 0, (0, 0, 1, 0)), ('t', 7, 0, (0, 0, 1, 1)), ('t', 7, 0, (0, 0, 1, 2))]
+  channel VU1->SPSU1 FIFO/backpressure cap=None depth=None in_flight=0 tokens=4 first=[('s', 0, (0, 0, 1, 0)), ('s', 0, (0, 0, 1, 1)), ('s', 0, (0, 0, 1, 2))]
+  channel ABSU0->ABLU0:0 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:1 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:2 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:3 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:4 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:5 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:6 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU0->ABLU0:7 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:0 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:1 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:2 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:3 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:4 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:5 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:6 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel ABSU1->ABLU1:7 SP/put/get cap=1 depth=None in_flight=1 tokens=1 first=[1]
+  channel NCLU->SPLU0 SP/put/get cap=1 depth=16 in_flight=1 tokens=2 first=[0, 1]
+  channel NCLU->SPLU1 SP/put/get cap=1 depth=16 in_flight=1 tokens=2 first=[0, 1]
+  channel SPSU0->NCSU SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[2]
+  channel SPSU1->NCSU SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[2]
+
+######## events (dnc 0)
+  (0, 'NCLU', None) [('load', 64, 0), ('put', ('splu0', 'splu1')), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1), ('load', 1, 1)] ...
+  (0, 'SPLU', 0) [('get', ('nclu',)), ('stage', 64, 'XVU', False, 0), ('get', ('nclu',)), ('stage', 4, 'XVU', False, 1)] 
+  (0, 'XVU', 0) [('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1)] ...
+  (0, 'ABSU', 0) [('write', 4, 'XVU'), ('put', ('ablu',)), ('get', ('ablu',))] 
+  (0, 'ABLU', 0) [('put', ('absu',)), ('get', ('absu',)), ('stage', 4, 'TU', False, 0), ('stage', 4, 'TU', False, 0)] 
+  (0, 'VU', 0) [('pop', 4), ('push', 4)] 
+  (0, 'SPSU', 0) [('write', 4, 'VU'), ('put', ('ncsu',))] 
+  (0, 'SPLU', 1) [('get', ('nclu',)), ('stage', 64, 'XVU', False, 0), ('get', ('nclu',)), ('stage', 4, 'XVU', False, 1)] 
+  (0, 'XVU', 1) [('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1), ('pop', 1), ('push', 1)] ...
+  (0, 'ABSU', 1) [('write', 4, 'XVU'), ('put', ('ablu',)), ('get', ('ablu',))] 
+  (0, 'ABLU', 1) [('put', ('absu',)), ('get', ('absu',)), ('stage', 4, 'TU', False, 0), ('stage', 4, 'TU', False, 0)] 
+  (0, 'VU', 1) [('pop', 4), ('push', 4)] 
+  (0, 'SPSU', 1) [('write', 4, 'VU'), ('put', ('ncsu',))] 
+  (0, 'NCSU', None) [('get', ('spsu0', 'spsu1')), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('store', 1, 0), ('fence',)] 
+
+######## FabricProgram (after fold_templates)
+FabricProgram units=480 schedule_driven=False sp_fan=2 reduces=False reduce_monoid=add mesync=ClusterBarrier broadcast=set() cout_spatial=False
+  units: ABSU1@0, ABSU0@0, ABLU1@0, ABLU0@0, SPSU1@0, SPSU0@0, SPLU1@0, SPLU0@0, VU1@0, VU0@0, XVU1@0, XVU0@0 ...
+  edges[0]: 
+  channel c0 Barrier None->None peers=(('ABSU', 0), ('ABLU', 0)) roles=('frame_release', 'frame_acquire') gran='' fires=None
+  channel c1 Barrier None->None peers=(('NCLU', 0), ('NCSU', 0)) roles=('fence', 'fence') gran='' fires=None
+  channel c2 Fan ('NCLU', 0)->None peers=('SPLU0', 'SPLU1') roles=('stage', 'load') gran='' fires={0: 2}
+  channel c3 Carried ('NCSU', 0)->('NCLU', 0) peers=() roles=('credit', 'credit') gran='credit' fires={0: 1}
+  channel c4 Gather None->('NCSU', 0) peers=('SPSU0', 'SPSU1') roles=('egress', 'drain') gran='per_tile' fires={1: 1, 0: 1}
+  channel c5 Barrier None->None peers=(('ABSU', 1), ('ABLU', 1)) roles=('frame_release', 'frame_acquire') gran='' fires=None
+  channel c6 Barrier None->None peers=(('NCLU', 1), ('NCSU', 1)) roles=('fence', 'fence') gran='' fires=None
+  channel c7 Fan ('NCLU', 1)->None peers=('SPLU0', 'SPLU1') roles=('stage', 'load') gran='' fires={0: 2}
+  channel c8 Carried ('NCSU', 1)->('NCLU', 1) peers=() roles=('credit', 'credit') gran='credit' fires={0: 1}
+  channel c9 Gather None->('NCSU', 1) peers=('SPSU0', 'SPSU1') roles=('egress', 'drain') gran='per_tile' fires={1: 1, 0: 1}
+  ... (+71 channels)
+
+######## UnitPrograms dnc 0
+UnitProgram ABSU dnc=0 ncore=1 col=0 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[2] lccr_raw[0] framing={'unit_id': 144, 'spr': 16712191, 'lrf_idx': [0, 1], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Frame axes=('Bmb', 'Br', 'Bout') mvs=3
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=False
+          Tmpl LDSTU {src0=0, burst_sz=4, be=0, src1=1, interleave_sz=0, burst=1}
+          Tmpl SYNC_ROLE {ref=frame_release, be=1}
+      Tmpl SYNC_ROLE {ref=frame_acquire}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram ABSU dnc=0 ncore=0 col=0 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[2] lccr_raw[0] framing={'unit_id': 144, 'spr': 16712191, 'lrf_idx': [0, 1], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Frame axes=('Bmb', 'Br', 'Bout') mvs=3
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=False
+          Tmpl LDSTU {src0=0, burst_sz=4, be=0, src1=1, interleave_sz=0, burst=1}
+          Tmpl SYNC_ROLE {ref=frame_release, be=1}
+      Tmpl SYNC_ROLE {ref=frame_acquire}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram ABLU dnc=0 ncore=1 col=1 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[11] lccr_raw[0] framing={'unit_id': 136, 'spr': 16712191, 'lrf_idx': [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (2 top-level nodes):
+    _Frame axes=('Bmb', 'Br', 'Bout') mvs=3
+      Tmpl SYNC_ROLE {ref=frame_release}
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=False
+          Tmpl SYNC_ROLE {ref=frame_acquire}
+          Tmpl LDSTU {src0=0, burst_sz=4, be=0, src1=15, interleave_sz=0, burst=1, ld_type=1}
+          Tmpl LDSTU {src0=4, burst_sz=4, be=1, src1=15, interleave_sz=0, burst=1, ld_type=1}
+    Tmpl RETURN {be=0}
+UnitProgram ABLU dnc=0 ncore=0 col=1 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[11] lccr_raw[0] framing={'unit_id': 136, 'spr': 16712191, 'lrf_idx': [0, 1, 2, 3, 4, 5, 6, 7, 8, 14, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (2 top-level nodes):
+    _Frame axes=('Bmb', 'Br', 'Bout') mvs=3
+      Tmpl SYNC_ROLE {ref=frame_release}
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=False
+          Tmpl SYNC_ROLE {ref=frame_acquire}
+          Tmpl LDSTU {src0=0, burst_sz=4, be=0, src1=15, interleave_sz=0, burst=1, ld_type=1}
+          Tmpl LDSTU {src0=4, burst_sz=4, be=1, src1=15, interleave_sz=0, burst=1, ld_type=1}
+    Tmpl RETURN {be=0}
+UnitProgram SPSU dnc=0 ncore=1 col=2 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[3] lccr_raw[0] framing={'unit_id': 192, 'spr': 16712191, 'lrf_idx': [1, 3, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (14 top-level nodes):
+    _Vocab sp_immc {'reg': 1, 'byte': 135552}
+    _Vocab sp_immc {'reg': 3, 'byte': 136320}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    _Vocab sp_copy {'dst': None, 'src': 1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl STU {src1=15, burst=1, burst_sz=4, st_producer=2}
+    Tmpl SYNC_ROLE {ref=egress}
+    Tmpl NOP {be=1}
+    _Vocab sp_mod {'reg': 3, 'imm': 128, 'be': 0}
+    _Vocab sp_mod {'reg': 1, 'imm': 256, 'be': 1}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram SPSU dnc=0 ncore=0 col=2 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[3] lccr_raw[0] framing={'unit_id': 192, 'spr': 16712191, 'lrf_idx': [1, 3, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (14 top-level nodes):
+    _Vocab sp_immc {'reg': 1, 'byte': 135040}
+    _Vocab sp_immc {'reg': 3, 'byte': 136064}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    _Vocab sp_copy {'dst': None, 'src': 1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl STU {src1=15, burst=1, burst_sz=4, st_producer=2}
+    Tmpl SYNC_ROLE {ref=egress}
+    Tmpl NOP {be=1}
+    _Vocab sp_mod {'reg': 3, 'imm': 128, 'be': 0}
+    _Vocab sp_mod {'reg': 1, 'imm': 256, 'be': 1}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram SPLU dnc=0 ncore=1 col=3 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[15] lccr_raw[0] framing={'unit_id': 160, 'spr': 16712191, 'lrf_idx': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15], 'footprint': 52} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (9 top-level nodes):
+    _Vocab sp_immc {'reg': 0, 'byte': 125824}
+    _Vocab sp_immc {'reg': 3, 'byte': 134528}
+    _Vocab sp_copy {'dst': 2, 'src': 3}
+    _Vocab sp_copy {'dst': 5, 'src': 6}
+    _Vocab sp_copy {'dst': 8, 'src': 15}
+    Tmpl SYNC_ROLE {ref=load}
+    _Loop kind=axis axes=('line',) mv={'typ1_imm': 64} cascade=False
+      Tmpl LDU {src0=0, src1=10, burst=1, burst_sz=1, ld_consumer=1}
+    Tmpl SYNC_ROLE {ref=load}
+    _Loop kind=close axes=() mv={'typ1_imm': 1} cascade=False
+      Tmpl LDU {src0=2, src1=10, burst=1, burst_sz=4, ld_consumer=1}
+UnitProgram SPLU dnc=0 ncore=0 col=3 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[15] lccr_raw[0] framing={'unit_id': 160, 'spr': 16712191, 'lrf_idx': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15], 'footprint': 52} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (9 top-level nodes):
+    _Vocab sp_immc {'reg': 0, 'byte': 125824}
+    _Vocab sp_immc {'reg': 3, 'byte': 134016}
+    _Vocab sp_copy {'dst': 2, 'src': 3}
+    _Vocab sp_copy {'dst': 5, 'src': 6}
+    _Vocab sp_copy {'dst': 8, 'src': 15}
+    Tmpl SYNC_ROLE {ref=load}
+    _Loop kind=axis axes=('line',) mv={'typ1_imm': 64} cascade=False
+      Tmpl LDU {src0=0, src1=10, burst=1, burst_sz=1, ld_consumer=1}
+    Tmpl SYNC_ROLE {ref=load}
+    _Loop kind=close axes=() mv={'typ1_imm': 1} cascade=False
+      Tmpl LDU {src0=2, src1=10, burst=1, burst_sz=4, ld_consumer=1}
+UnitProgram VU dnc=0 ncore=1 col=4 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[1] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [0, 12, 13, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (15 top-level nodes):
+    Tmpl FCMP {src0=16, src1=4, src2=10, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=20, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=21, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=22, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=23, slice_en=255, be=0}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl FMA {src0=2, src1=14, src2=20, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=20}
+    Tmpl FMA {src0=20, src1=14, src2=10, out_nbr=0, out_sp=3, out_xvu=0, lrf_tgt=0}
+    Tmpl NOP {be=1}
+    Tmpl NOP {be=1}
+    Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=28, slice_en=255, be=0}
+    Tmpl RETURN {be=0}
+UnitProgram VU dnc=0 ncore=0 col=4 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[1] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [0, 12, 13, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (15 top-level nodes):
+    Tmpl FCMP {src0=16, src1=4, src2=10, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=20, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=21, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=22, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=23, slice_en=255, be=0}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl FMA {src0=2, src1=14, src2=20, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=20}
+    Tmpl FMA {src0=20, src1=14, src2=10, out_nbr=0, out_sp=3, out_xvu=0, lrf_tgt=0}
+    Tmpl NOP {be=1}
+    Tmpl NOP {be=1}
+    Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=28, slice_en=255, be=0}
+    Tmpl RETURN {be=0}
+UnitProgram XVU dnc=0 ncore=1 col=5 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[2] framing={'unit_id': 132, 'spr': 1895768575, 'lrf_idx': [11, 12, 13, 14], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+      _Frame axes=() mvs=1
+        _Loop kind=axis axes=('line',) mv={'typ1_imm': 64} cascade=False
+          Tmpl LOGICAL {src0=1, src1=1, src2=10, out_nbr=0, out_vu=0, out_sp=0, out_ab=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          _Frame axes=() mvs=1
+            _Loop kind=policy axes=() mv={'typ1_imm': 4} cascade=False
+              Tmpl LOGICAL {src0=1, src1=1, src2=10, out_nbr=0, out_vu=0, out_sp=0, out_ab=1}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram XVU dnc=0 ncore=0 col=5 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[2] framing={'unit_id': 132, 'spr': 1895768575, 'lrf_idx': [11, 12, 13, 14], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+      _Frame axes=() mvs=1
+        _Loop kind=axis axes=('line',) mv={'typ1_imm': 64} cascade=False
+          Tmpl LOGICAL {src0=1, src1=1, src2=10, out_nbr=0, out_vu=0, out_sp=0, out_ab=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          _Frame axes=() mvs=1
+            _Loop kind=policy axes=() mv={'typ1_imm': 4} cascade=False
+              Tmpl LOGICAL {src0=1, src1=1, src2=10, out_nbr=0, out_vu=0, out_sp=0, out_ab=1}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram NCSU dnc=0 ncore=None col=6 bd={'dnc': 0, 'ncore': None}
+  boundary[0]: 
+  env={'sp_base': 1055}
+  lrf_raw[2] lccr_raw[0] framing={'unit_id': 1024, 'spr': 16712191, 'lrf_idx': [0, 8], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (9 top-level nodes):
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    _Vocab car_copy {'dst': 9, 'src': 8}
+    _Vocab shm_prime {'sar': Param(name='sp_base', lo=0, hi=65535), 'base': 9, 'regs': (11, 12)}
+    _Loop kind=close axes=() mv={'typ1_imm': 1} cascade=False
+      Tmpl SYNC_ROLE {ref=drain}
+      Tmpl STSU {src0=11, src2=11, burst=8}
+      _Vocab shm_advance {'lines': 0, 'be': 0, 'regs': (11, 12)}
+    Tmpl SYNC_ROLE {ref=credit}
+    _Vocab car_add {'reg': 8, 'lines': 1, 'be': 1}
+    Tmpl SYNC_ROLE {ref=fence}
+    Tmpl RETURN {}
+    Tmpl RETURN {}
+UnitProgram NCLU dnc=0 ncore=None col=7 bd={'dnc': 0, 'ncore': None}
+  boundary[0]: 
+  env={}
+  lrf_raw[15] lccr_raw[0] framing={'unit_id': 512, 'spr': 16712191, 'lrf_idx': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (42 top-level nodes):
+    Tmpl JIMMCOPY {typ1_imm=1, jcr_tgt=14}
+    Tmpl CXRIMM {src0=15}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    _Vocab sar_set {'reg': 15, 'off': 0}
+    _Vocab car_copy {'dst': 5, 'src': 3}
+    _Vocab car_copy {'dst': 6, 'src': 3}
+    _Vocab car_copy {'dst': 2, 'src': None}
+    _Vocab car_copy {'dst': 9, 'src': 7}
+    _Vocab car_copy {'dst': 10, 'src': 7}
+    _Vocab car_copy {'dst': 13, 'src': 11}
+    _Vocab sar_set {'reg': 2, 'off': 0}
+    _Vocab sar_set {'reg': 5, 'off': 1047}
+    _Vocab sar_set {'reg': 6, 'off': 1047}
+    _Vocab sar_set {'reg': 13, 'off': 0}
+UnitProgram TU dnc=0 ncore=1 col=0 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 56} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=15, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=0 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 56} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=15, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=1 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 48} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=1 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 48} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=2 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 40} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=2 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 40} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=3 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 32} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=3 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 32} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=4 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 24} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=4 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 24} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=5 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 16} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=5 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 16} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=6 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 8} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=6 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (5 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=formula axes=() mv={'typ1_imm': 8} cascade=False
+          Tmpl FMA {src0=13, src1=15, src2=3, tgte=0, tgts=1, tgtrf=15, url=0}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=1 col=7 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+UnitProgram TU dnc=0 ncore=0 col=7 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[0] lccr_raw[0] framing={'unit_id': 129, 'spr': 16720383, 'lrf_idx': [], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (3 top-level nodes):
+    _Frame axes=('total_iter', 'Cout/Tout') mvs=2
+      _Loop kind=axis axes=('Bout',) mv={'typ1_imm': 1} cascade=True
+        Tmpl FMA {src0=15, src1=13, src2=3, tgte=0, tgts=0, tgtrf=0, url=28}
+        _Loop kind=axis axes=('Br',) mv={'typ1_imm': 1} cascade=True
+          Tmpl MVLOOPCNT {typ1_imm=1}
+          Tmpl FMA {src0=0, src1=13, src2=2, tgte=2, tgts=0, tgtrf=8, url=20}
+          Tmpl FMA {src0=4, src1=8, src2=2, tgte=2, tgts=3, tgtrf=15, url=18}
+    Tmpl RETURN {be=0}
+    Tmpl RETURN {be=0}
+
+######## unit_layouts (systolic edges)
+  ('NCLU', 'SPLU', 'w') -> [N=64:1λ K=64:1L]·SP @kernel
+  ('SPLU', 'XVU', 'w') -> [N=64:1λ K=64:1L]·SP @kernel
+  ('XVU', 'TU', 'w') -> [N=64:1λ K=64:1L]·SP @kernel
+  ('NCLU', 'SPLU', 'x') -> [M.nc=2:4ρ M=4:1λ K=64:1L]·SP @ab_bank
+  ('SPLU', 'XVU', 'x') -> [M.nc=2:4ρ M=4:1λ K=64:1L]·SP @ab_bank
+  ('XVU', 'ABSU', 'x') -> [M.nc=2:4ρ M=4:1λ K=64:1L]·SP @ab_bank
+  ('ABSU', 'ABLU', 'x') -> [M.nc=2:4ρ M=4:1λ K.grp=8:8L K.in=8:1L]·SP @ab_bank
+  ('ABLU', 'TU', 'x') -> [M.nc=2:4ρ M=4:1λ K.grp=8:8L K.in=8:-1L]·SP @ab_bank
