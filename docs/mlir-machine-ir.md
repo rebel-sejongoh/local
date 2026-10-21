@@ -1,4 +1,4 @@
-# NCLU / SPLU machine IR example (sqrt R=2048, K=64, DNC 0)
+# MLIR machine IR example: NCLU and SPLU (sqrt R=2048, K=64, DNC 0)
 
 Decisions applied
 - Every unit is SSA. A value carried across a loop is a loop `iter` / `yield`; a value merged after a branch is a block argument.
