@@ -20,6 +20,8 @@
   --w: #b4620a;  --w-soft: #f6e6d3;   /* kernel w */
   --p: #1d8a5c;  --p-soft: #d6efe3;   /* partial sums */
   --pad: #8a939d; --pad-soft: #eceef0; /* padding rows */
+  --rg: #6a58c9; --rg-soft: #efecfb;   /* pipelined region */
+  --xd: #b8325a;                       /* cross-DNC sync */
   --sans: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
@@ -28,6 +30,7 @@
     --bg: #111418; --surface: #191d22; --fg: #e4e8ec; --muted: #9aa4af; --line: #2f363e;
     --x: #78a6ff; --x-soft: #1c2a44; --w: #f0a24e; --w-soft: #3a2a17;
     --p: #52c993; --p-soft: #15342a; --pad: #6c7681; --pad-soft: #23282e;
+    --rg: #a99cff; --rg-soft: #232038; --xd: #ff7aa2;
     color-scheme: dark;
   }
 }
@@ -35,6 +38,7 @@
   --bg: #111418; --surface: #191d22; --fg: #e4e8ec; --muted: #9aa4af; --line: #2f363e;
   --x: #78a6ff; --x-soft: #1c2a44; --w: #f0a24e; --w-soft: #3a2a17;
   --p: #52c993; --p-soft: #15342a; --pad: #6c7681; --pad-soft: #23282e;
+  --rg: #a99cff; --rg-soft: #232038; --xd: #ff7aa2;
   color-scheme: dark;
 }
 body {
@@ -91,6 +95,27 @@ tr:last-child td { border-bottom: 0; }
 .d .ap { fill: none; stroke: var(--p); stroke-width: 1.6; }
 .d .hx { fill: var(--x); } .d .hw { fill: var(--w); } .d .hp { fill: var(--p); } .d .hf { fill: var(--fg); }
 .d .cx { fill: var(--x); } .d .cw { fill: var(--w); } .d .cp { fill: var(--p); }
+.d .rgn { fill: var(--rg-soft); stroke: var(--rg); stroke-width: 1.4; }
+.d .dmar { fill: var(--pad-soft); stroke: var(--pad); stroke-width: 1.2; }
+.d .node { fill: var(--surface); stroke: var(--fg); stroke-width: 1.1; }
+.d .mem { fill: var(--surface); stroke: var(--fg); stroke-width: 1.1; }
+.d .memi { fill: none; stroke: var(--fg); stroke-width: 0.7; }
+.d .leafband { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.d .ff { fill: none; stroke: var(--fg); stroke-width: 1.6; }
+.d .bd { fill: none; stroke: var(--fg); stroke-width: 1.2; stroke-dasharray: 5 3; }
+.d .nx { fill: none; stroke: var(--rg); stroke-width: 1.2; stroke-dasharray: 1 3; }
+.d .xdl { fill: none; stroke: var(--xd); stroke-width: 1.6; stroke-dasharray: 6 3; }
+.d .hxd { fill: var(--xd); } .d .hrg { fill: var(--rg); }
+.d .crg { fill: var(--rg); } .d .cxd { fill: var(--xd); }
+.chip .crgn { background: var(--rg-soft); border-color: var(--rg); }
+.chip .cdma { background: var(--pad-soft); border-color: var(--pad); }
+.chip .cmem { background: var(--surface); border-color: var(--fg); border-style: double; border-width: 3px; }
+.chip .lff, .chip .lbd, .chip .lxd { width: 26px; height: 0; border-radius: 0; border-width: 0; border-top: 2px solid var(--fg); }
+.chip .lbd { border-top-style: dashed; }
+.chip .lxd { border-top: 2px dashed var(--xd); }
+.chip .lrg { width: 26px; height: 0; border-radius: 0; border-width: 0; border-top: 2px dashed var(--rg); }
+.d .cr { fill: none; stroke: var(--rg); stroke-width: 1.8; stroke-dasharray: 7 3; }
+.d .bndband { fill: var(--pad-soft); stroke: var(--pad); stroke-width: 1; }
 @media (max-width: 520px) { h1 { font-size: 22px; } body { font-size: 14.5px; } }
 </style>
 </head>
@@ -242,6 +267,153 @@ tr:last-child td { border-bottom: 0; }
     </div>
     <figcaption>w는 TU north로 들어가 TU 안에 머뭅니다(weight-stationary). x는 AB를 거쳐 각 TU row의 west로 들어가고, 부분합은 row 0 → 7로 south를 타고 내려가 VU로 나갑니다. Root DNC(k = 0)는 여기에 더해 형제 DNC 3개의 partial을 SHM → NCLU → SP → SPLU → VU로 받아 더합니다.</figcaption>
   </figure>
+</section>
+
+<!-- Spatial dataflow -->
+<section>
+  <h2>Spatial dataflow: pipelined region과 경계 <span class="unit">현재 코드 기준 · DNC 하나의 shape</span></h2>
+  <p>한 unit 안에서 일을 순서대로 하는 것(SPLU가 w 다음 x, TU가 prime 다음 compute)은 region을 끊지 않습니다. 메모리와 SYNC로 넘기는 SP·AB도 블록 단위 FIFO로 보고 region 안에 둡니다. region이 끊기는 곳은 다른 unit들을 거쳐 같은 unit으로 되돌아오는 의존이 생기는 곳 하나뿐입니다. 현재 코드에서는 store 1 뒤에 NCSU가 NCLU에 주는 credit이 그 의존을 만듭니다. R1은 16개 DNC가 모두 실행하고, R2는 root 4개(k = 0)만 실행합니다.</p>
+  <div class="legend">
+    <span class="chip"><i class="crgn"></i>streaming region</span>
+    <span class="chip"><i class="cmem"></i>버퍼 / 상태</span>
+    <span class="chip"><i class="lff"></i>FIFO</span>
+    <span class="chip"><i class="lbd"></i>메모리 + SYNC (블록 단위)</span>
+    <span class="chip"><i class="lrg"></i>region 경계 (credit, 상태)</span>
+    <span class="chip"><i class="lxd"></i>DNC 간 (SHM + MESYNC)</span>
+  </div>
+  <figure>
+    <div class="scroll">
+    <svg class="d" viewBox="0 0 900 810" role="img" aria-label="Current code as two streaming regions with a memory boundary between them. R1 runs on all 16 DNCs: it reads x [1,64] and w [64,64] and computes a padded [4,64] tile. Its outputs are acc [4,64] in the root's VU registers and, on each of the 12 leaves, one [1,64] partial line in SHM. R2 runs on the 4 roots: it adds three [1,64] partials to acc and stores out[m,:] [1,64] to SHM.">
+      <defs>
+        <marker id="sp-k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hf"/></marker>
+        <marker id="sp-x" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hxd"/></marker>
+        <marker id="sp-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="hrg"/></marker>
+      </defs>
+
+      <!-- SHM in -->
+      <rect class="mem" x="36" y="16" width="190" height="40"/><rect class="memi" x="39" y="19" width="184" height="34"/>
+      <text x="131" y="32" text-anchor="middle" class="t-b">SHM (in)</text><text x="131" y="48" text-anchor="middle" class="t-s t-mut">x [1,64] 1줄 · w [64,64] 64줄</text>
+
+      <!-- R1 -->
+      <rect class="rgn" x="20" y="76" width="860" height="330" rx="8"/>
+      <text x="32" y="96" class="t-s t-b crg">R1 · feed + compute · 16 DNC 모두</text>
+      <text x="300" y="96" class="t-s">in x[m, 64k:+64] [1,64], w[64k:+64, :] [64,64] · 내부 tile [4,64] (행 1–3 padding)</text>
+      <line class="bd" x1="95" y1="56" x2="95" y2="124" marker-end="url(#sp-k)"/>
+
+      <rect class="node" x="36" y="126" width="118" height="28" rx="3"/><text x="95" y="144" text-anchor="middle">NCLU · LDMU</text>
+      <rect class="mem" x="180" y="112" width="124" height="56"/><rect class="memi" x="183" y="115" width="118" height="50"/>
+      <text x="242" y="130" text-anchor="middle" class="t-b">SP</text>
+      <text x="242" y="146" text-anchor="middle" class="t-s t-mut">w 0x3d8–0x417</text>
+      <text x="242" y="160" text-anchor="middle" class="t-s t-mut">x 0x418–0x41b</text>
+      <rect class="node" x="330" y="126" width="80" height="28" rx="3"/><text x="370" y="144" text-anchor="middle">SPLU</text>
+      <rect class="node" x="440" y="126" width="80" height="28" rx="3"/><text x="480" y="144" text-anchor="middle">XVU</text>
+      <line class="bd" x1="154" y1="140" x2="178" y2="140" marker-end="url(#sp-k)"/>
+      <line class="bd" x1="304" y1="140" x2="328" y2="140" marker-end="url(#sp-k)"/>
+      <text x="316" y="122" text-anchor="middle" class="t-s">SYNC</text>
+      <line class="ff" x1="410" y1="140" x2="438" y2="140" marker-end="url(#sp-k)"/>
+
+      <!-- TU -->
+      <rect class="node" x="680" y="116" width="180" height="170" rx="4"/>
+      <text x="770" y="140" text-anchor="middle" class="t-b">TU rows 0–7</text>
+      <text x="770" y="162" text-anchor="middle" class="t-s">north: w 64줄,</text>
+      <text x="770" y="177" text-anchor="middle" class="t-s">이어서 psum chain</text>
+      <text x="770" y="198" text-anchor="middle" class="t-s t-mut">LRF0–7 = w (prime)</text>
+      <text x="770" y="214" text-anchor="middle" class="t-s t-mut">LRF8–11 = psum[t]</text>
+      <text x="770" y="236" text-anchor="middle" class="t-s t-mut">row r: prime → pass → compute</text>
+      <line class="ff" x1="520" y1="140" x2="678" y2="140" marker-end="url(#sp-k)"/>
+      <text x="600" y="132" text-anchor="middle" class="t-s">w [64,64] → north</text>
+
+      <!-- x path -->
+      <rect class="node" x="440" y="196" width="80" height="28" rx="3"/><text x="480" y="214" text-anchor="middle">ABSU</text>
+      <rect class="mem" x="440" y="246" width="80" height="40"/><rect class="memi" x="443" y="249" width="74" height="34"/>
+      <text x="480" y="262" text-anchor="middle" class="t-b">AB</text><text x="480" y="278" text-anchor="middle" class="t-s t-mut">0x000–0x03f</text>
+      <rect class="node" x="560" y="252" width="90" height="28" rx="3"/><text x="605" y="270" text-anchor="middle">ABLU ×8</text>
+      <line class="ff" x1="480" y1="154" x2="480" y2="194" marker-end="url(#sp-k)"/>
+      <text x="488" y="180" class="t-s">x [4,64]</text>
+      <line class="bd" x1="480" y1="224" x2="480" y2="244" marker-end="url(#sp-k)"/>
+      <line class="bd" x1="520" y1="266" x2="558" y2="266" marker-end="url(#sp-k)"/>
+      <text x="539" y="258" text-anchor="middle" class="t-s">SYNC</text>
+      <line class="ff" x1="650" y1="266" x2="678" y2="266" marker-end="url(#sp-k)"/>
+      <text x="605" y="244" text-anchor="middle" class="t-s">x → west</text>
+
+      <!-- drain row -->
+      <rect class="node" x="720" y="336" width="80" height="28" rx="3"/><text x="760" y="354" text-anchor="middle">VU</text>
+      <rect class="node" x="560" y="336" width="80" height="28" rx="3"/><text x="600" y="354" text-anchor="middle">SPSU</text>
+      <rect class="mem" x="400" y="330" width="120" height="40"/><rect class="memi" x="403" y="333" width="114" height="34"/>
+      <text x="460" y="346" text-anchor="middle" class="t-b">SP · psum</text><text x="460" y="362" text-anchor="middle" class="t-s t-mut">[4,64] 0x419–0x41c</text>
+      <rect class="node" x="240" y="336" width="110" height="28" rx="3"/><text x="295" y="354" text-anchor="middle">NCSU</text>
+      <line class="ff" x1="760" y1="286" x2="760" y2="334" marker-end="url(#sp-k)"/>
+      <text x="768" y="314" class="t-s">S_7 [4,64]</text>
+      <line class="ff" x1="720" y1="350" x2="642" y2="350" marker-end="url(#sp-k)"/>
+      <text x="681" y="342" text-anchor="middle" class="t-s">store 1</text>
+      <line class="bd" x1="560" y1="350" x2="522" y2="350" marker-end="url(#sp-k)"/>
+      <line class="bd" x1="400" y1="350" x2="352" y2="350" marker-end="url(#sp-k)"/>
+      <text x="376" y="342" text-anchor="middle" class="t-s">SYNC</text>
+      <text x="32" y="394" class="t-s">out · root: acc [4,64] (VU LRF, SHM에 안 씀) · leaf: partial [1,64] = SP 0x419 1줄 → SHM</text>
+
+      <!-- boundary band -->
+      <rect class="bndband" x="20" y="428" width="860" height="94" rx="6"/>
+      <text x="32" y="446" class="t-s t-b">R1 → R2 경계 (메모리 / 상태)</text>
+      <rect class="mem" x="300" y="458" width="190" height="50"/><rect class="memi" x="303" y="461" width="184" height="44"/>
+      <text x="395" y="477" text-anchor="middle" class="t-b">VU LRF4–7 · acc</text><text x="395" y="495" text-anchor="middle" class="t-s t-mut">[4,64] · root만 (행 0 유효)</text>
+      <rect class="mem" x="620" y="458" width="240" height="50"/><rect class="memi" x="623" y="461" width="234" height="44"/>
+      <text x="740" y="477" text-anchor="middle" class="t-b">SHM · partial</text><text x="740" y="495" text-anchor="middle" class="t-s t-mut">12 × [1,64] · 0x113 + 3m + j</text>
+      <!-- R1 -> boundary -->
+      <path class="cr" d="M760,364 L760,414 L395,414 L395,456" marker-end="url(#sp-r)"/>
+      <path class="xdl" d="M330,366 L330,438 L700,438 L700,456" marker-start="url(#sp-x)" marker-end="url(#sp-x)"/>
+      <text x="508" y="434" class="t-s cxd">leaf만: STSU 1줄 + MESYNC ⇄</text>
+
+      <!-- boundary -> R2 -->
+      <line class="cr" x1="395" y1="508" x2="370" y2="588" marker-end="url(#sp-r)"/>
+      <line class="xdl" x1="800" y1="510" x2="800" y2="588" marker-start="url(#sp-x)" marker-end="url(#sp-x)"/>
+      <text x="808" y="548" class="t-s cxd">LDMU +</text>
+      <text x="808" y="562" class="t-s cxd">MESYNC ⇄</text>
+      <path class="cr" d="M260,364 L260,572 L760,572 L760,588" marker-end="url(#sp-r)"/>
+
+      <!-- R2 -->
+      <rect class="rgn" x="20" y="540" width="860" height="176" rx="8"/>
+      <text x="32" y="560" class="t-s t-b crg">R2 · root gather ×3 · root 4 DNC</text>
+      <text x="270" y="566" class="t-s crg">credit: SYNC NCSU → NCLU (store 1 뒤)</text>
+      <rect class="node" x="700" y="590" width="160" height="28" rx="3"/><text x="780" y="608" text-anchor="middle">NCLU · LDMU ×3</text>
+      <rect class="mem" x="560" y="584" width="124" height="40"/><rect class="memi" x="563" y="587" width="118" height="34"/>
+      <text x="622" y="600" text-anchor="middle" class="t-b">SP · gather</text><text x="622" y="616" text-anchor="middle" class="t-s t-mut">3 × [1,64]</text>
+      <rect class="node" x="440" y="590" width="80" height="28" rx="3"/><text x="480" y="608" text-anchor="middle">SPLU</text>
+      <rect class="node" x="320" y="590" width="80" height="28" rx="3"/><text x="360" y="608" text-anchor="middle">VU</text>
+      <rect class="node" x="200" y="590" width="80" height="28" rx="3"/><text x="240" y="608" text-anchor="middle">SPSU</text>
+      <line class="bd" x1="700" y1="604" x2="686" y2="604" marker-end="url(#sp-k)"/>
+      <line class="bd" x1="560" y1="604" x2="522" y2="604" marker-end="url(#sp-k)"/>
+      <text x="541" y="640" text-anchor="middle" class="t-s">SYNC · 4줄 창</text>
+      <line class="ff" x1="440" y1="604" x2="402" y2="604" marker-end="url(#sp-k)"/>
+      <line class="ff" x1="320" y1="604" x2="282" y2="604" marker-end="url(#sp-k)"/>
+      <text x="301" y="640" text-anchor="middle" class="t-s">store 2–4</text>
+      <rect class="mem" x="180" y="656" width="120" height="40"/><rect class="memi" x="183" y="659" width="114" height="34"/>
+      <text x="240" y="672" text-anchor="middle" class="t-b">SP · psum</text><text x="240" y="688" text-anchor="middle" class="t-s t-mut">0x419 덮어쓰기</text>
+      <rect class="node" x="36" y="662" width="110" height="28" rx="3"/><text x="91" y="680" text-anchor="middle">NCSU · STSU</text>
+      <line class="bd" x1="240" y1="618" x2="240" y2="654" marker-end="url(#sp-k)"/>
+      <line class="bd" x1="180" y1="676" x2="148" y2="676" marker-end="url(#sp-k)"/>
+      <text x="330" y="696" class="t-s">in acc [4,64] + 3 × partial [1,64] → out out[m, :] [1,64]</text>
+
+      <!-- SHM out -->
+      <line class="bd" x1="91" y1="690" x2="91" y2="748" marker-end="url(#sp-k)"/>
+      <rect class="mem" x="36" y="750" width="190" height="40"/><rect class="memi" x="39" y="753" width="184" height="34"/>
+      <text x="131" y="766" text-anchor="middle" class="t-b">SHM · out</text><text x="131" y="782" text-anchor="middle" class="t-s t-mut">4 × [1,64] · 0x110 + m</text>
+      <text x="246" y="774" class="t-s cxd">→ E: fence + MESYNC cluster barrier</text>
+    </svg>
+    </div>
+    <figcaption>R1 안의 SP와 AB는 SYNC 토큰으로 블록 단위로 넘기는 버퍼라 region을 끊지 않습니다. TU의 north link에는 w 64줄이 먼저, 이어서 위 row의 부분합이 같은 FIFO 순서로 흘러 row 0부터 아래로 wavefront처럼 진행합니다. R1이 끝나면 결과가 두 곳에 남습니다. root는 VU 레지스터에 acc [4,64]를 들고 있고 SHM에는 아무것도 쓰지 않습니다. leaf 12개는 SPSU가 SP에 쓴 4줄 중 실제 값인 0x419 한 줄만 NCSU가 SHM에 씁니다. DNC 간 MESYNC는 leaf R1의 NCSU와 root R2의 NCLU 사이에만 있고 양방향입니다(leaf가 준비됨을 알리고, root가 LDMU로 가져간 뒤 풀어 줌). R2는 이 두 경계를 입력으로 받고, credit은 NCLU → … → NCSU → NCLU로 되돌아오는 의존을 만들어 두 region을 순서대로 실행하게 합니다.</figcaption>
+  </figure>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Region</th><th>실행하는 DNC</th><th>DNC 하나의 입력</th><th>내부</th><th>DNC 하나의 출력</th></tr></thead>
+    <tbody>
+      <tr><td class="m">R1</td><td>16개 모두</td><td class="m">x[m, 64k:+64] [1,64] · w[64k:+64, :] [64,64]</td><td class="m">tile [4,64] (행 1–3 padding)</td><td>root: <span class="m">acc [4,64]</span> (VU LRF) · leaf: <span class="m">partial [1,64]</span> → SHM 1줄</td></tr>
+      <tr><td class="m">경계</td><td>—</td><td colspan="3">VU LRF acc (root 4개) · SHM partial 12 × [1,64] (0x114–0x11f) · credit (sync만)</td></tr>
+      <tr><td class="m">R2</td><td>root 4개 (k = 0)</td><td class="m">acc [4,64] + 3 × partial [1,64]</td><td class="m">SPLU 4줄 창 × 3</td><td class="m">out[m, :] [1,64] → SHM 0x110 + m</td></tr>
+      <tr><td class="m">전체</td><td>—</td><td class="m">x [4,256] · w [256,64]</td><td>—</td><td class="m">out [4,64] (4줄)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">credit이 없다면 VU를 입력 두 개(TU, SPLU)를 받는 merge node로 보고 R1과 R2를 한 region으로 합칠 수 있습니다. 그래도 R2의 실제 입력은 leaf의 R1이 끝나야 생기므로 시간상 이득은 root R1의 꼬리 정도입니다. credit이 SP gather 영역을 다시 쓰는 것 등 다른 이유로 필요한지는 확인하지 않았습니다.</p>
 </section>
 
 <!-- 1. SP -->
@@ -512,6 +684,12 @@ SPLU   beat q → XVU → TU.N   := SP[0x3d8 + q]
     </div>
     <figcaption>64개 w beat가 row 0으로 들어가서, row r이 앞의 8개(q = 8r..8r+7)를 LRF0–7에 잡고 나머지(56 − 8r개)를 south로 넘깁니다. 그 뒤 각 row는 west의 x로 K 8개짜리 내적을 하고, 위 row의 부분합(north)에 더해 south로 내립니다. row 7의 출력이 이 DNC의 K 64개 합입니다.</figcaption>
   </figure>
+  <p class="note"><b>k</b> 이 DNC의 K chunk (K = 64k..64k+63) · <b>r</b> TU row 0..7, 이 row의 K는 64k + 8r + 0..7 · <b>t</b> 4행 M tile의 행 0..3 (t = 0이 x[m, :], 1..3은 padding, FMA unroll index) · <b>n</b> 출력 lane 0..63</p>
+  <pre class="map">FMA 1   LRF[8+t][n] = x[t, 64k+8r+0 : +4] · w[64k+8r+0 : +4, n] + S_{r-1}[t][n]     (row 0: + 0)
+FMA 2   S_r[t][n]   = x[t, 64k+8r+4 : +8] · w[64k+8r+4 : +8, n] + LRF[8+t][n]       → south
+예      DNC 0, row 0, t = 0:  LRF8[n] = x[0, 0:4] · w[0:4, n],   S_0[0][n] = x[0, 4:8] · w[4:8, n] + LRF8[n]
+row 7   S_7[0][n] = x[m, 64k : 64k+64] · w[64k : 64k+64, n] = partial(m, k)[n]
+        (x와 w의 짝만 나타냄. Z 안 x 4개의 순서, mcc layout의 K.in 역순은 확인하지 않음)</pre>
   <pre class="map">prime   LRF_r[i] := w[64k + 8r + i, :]                         i &lt; 8
 mac     LRF_r[8+t] := Σ_{i&lt;4} LRF_r[i]   · Z_i(h=0, t) + Y        Y = 0 (r = 0), S_{r-1}[t] (r &gt; 0)
 drain   S_r[t]     := Σ_{i&lt;4} LRF_r[4+i] · Z_i(h=1, t) + LRF_r[8+t]
@@ -615,16 +793,59 @@ drain   S_r[t]     := Σ_{i&lt;4} LRF_r[4+i] · Z_i(h=1, t) + LRF_r[8+t]
       <text x="504" y="44" text-anchor="middle" class="t-s">NCSU STSU</text>
       <rect class="fp" x="560" y="40" width="180" height="24"/><text x="650" y="56" text-anchor="middle">SHM 0x110 + m</text>
       <text x="560" y="84" class="t-s t-mut">root: out[m, :]</text>
-      <text x="560" y="100" class="t-s t-mut">leaf: SHM 0x114 + … (root가 읽음)</text>
+      <text x="560" y="100" class="t-s t-mut">leaf: SHM 0x113 + 3m + k (root가 읽음)</text>
       <text x="300" y="178" class="t-s t-mut">0x41a–0x41c (t = 1..3)는 SHM으로 나가지 않음</text>
     </svg>
     </div>
     <figcaption>VU는 TU에서 온 4행을 acc[0..3]에 더합니다. root는 형제 partial 3개를 SPLU로 받아 단계마다 한 번 더 더하고, 매번 SPSU가 같은 SP 줄에 덮어씁니다. NCSU는 마지막에 0x419 한 줄(t = 0)만 SHM에 씁니다.</figcaption>
   </figure>
-  <pre class="map">VU     acc[t] := S_7[t]  (+ partial(4m+1..3) 순서대로, root만)
+  <pre class="map">VU FMA Result = X · Y + Z,  X = src0, Y = src1, Z = src2   (ISA REBEL/EVT1/VU/FMA, slice당 8-lane SIMD)
+       degree=2 → t = 0..3,  unroll_control.src2 / lrf_tgt = 1 → LRF4+t,  CONST4 = 0x3e00 = 1.0,  CONST0 = 0
+       FMA lrf_tgt=LRF4, src0=FIFO_TU, src1=CONST4, src2=LRF4    LRF[4+t] := pop(TU) · 1.0 + LRF[4+t]
+         acc를 막 0으로 만들었고 loop가 1번이라 첫 단계는 사실상 복사 (acc[t] := 0 + S_7[t]).
+         형제 단계와 같은 형태일 뿐, 실제로 더하는 건 root의 2–4단계 (src0=FIFO_SPLU).
+VU     acc[t] := S_7[t]  (+ partial(4m+1..3) 순서대로, root만)
 SPSU   SP[0x419 + t] := acc[t]                                   t &lt; 4
 NCSU   SHM[0x110 + m] := SP[0x419]     (root)
-       SHM[0x114 + …] := SP[0x419]     (leaf, root가 gather)</pre>
+       SHM[0x113 + 3m + k] := SP[0x419]   (leaf (m, k), k = 1..3, root m이 0x114+3m..+2를 gather)
+       SP 0x419 = acc[0] = 행 t = 0 = 이 DNC가 맡은 x 행 m의 값</pre>
+</section>
+
+<section>
+  <h2>Root reduce timeline <span class="unit">DNC 0 · NCLU · SPLU · VU · SPSU · NCSU</span></h2>
+  <p>각 unit은 동시에 돌고, 아래 순서는 SYNC / MESYNC / FIFO가 강제하는 인과 순서입니다. leaf DNC는 A, B를 한 뒤 C의 "leaf" 줄로 자기 partial을 내보내고 E에 참여합니다.</p>
+  <pre class="map">── A. 입력 준비 ─────────────────────────────────────────────────────────────────────────
+NCLU  LDMU src0=SAR0, src1=SBR0, src2=CAR0, src3=CBR0 {be=1}  ×2      w → SP 0x3d8..0x417
+NCLU  SYNC {dir.put=1, lsync_mask.splu0=1}
+SPLU  SYNC {dir.get=1, lsync_mask.nclu=1} ; LDU consumer=XVU, src0=LRF0, … ×64   w → XVU → TU north
+NCLU  LDMU src0=SAR12, … {burst=1} ; SYNC put → splu0                 x → SP 0x418
+SPLU  LDU consumer=XVU, src0=LRF2, src1=LRF10 {burst=1, burst_size=4}  SP 0x418..0x41b → ABSU
+
+── B. 자기 partial ──────────────────────────────────────────────────────────────────────
+VU    FMA lrf_tgt=LRF4, src0=FIFO_TU, src1=CONST4, src2=LRF4 {…}      acc[t] := 0 + S_7[t]
+VU    FMA sp_tgt=RESULT, src0=LRF4, src1=CONST4, src2=CONST0 {…}      store 1
+SPSU  STU producer=VU, … {burst_size=4} ; SYNC {dir.put=1, lsync_mask.ncsu=1}   → SP 0x419..0x41c
+NCSU  SYNC {dir.get=1, lsync_mask.spsu0=1} ; SYNC {dir.put=1, lsync_mask.nclu=1}  credit: gather 시작
+
+── C. 형제 gather, j = 1, 2, 3 ──────────────────────────────────────────────────────────
+leaf  NCSU STSU … ; MESYNC {dir.get=1, dir.put=1, sync_mask.dnc0=1, sync_mask.nclu=1}
+                                                                     DNC j: SP 0x419 → SHM 0x113+3m+j, root에 알림
+NCLU  SYNC {dir.get=1, lsync_mask.ncsu=1}                            credit (j = 1 전에 한 번)
+NCLU  MESYNC {dir.get=1, sync_mask.dncj=1, sync_mask.ncsu=1}          leaf j 준비됨
+NCLU  LDMU src0=SAR4, … {burst=1} ; SYNC put → splu0                 SHM 0x113+3m+j → SP 0x420+j
+NCLU  MESYNC {dir.put=1, sync_mask.dncj=1, sync_mask.ncsu=1}          leaf j 해제
+SPLU  SYNC get ← nclu ; LDU consumer=VU, src0=LRF11, … {burst_size=4} ; MODLRFIMM −3줄
+VU    FMA lrf_tgt=LRF4, src0=FIFO_SPLU, … {…}                         acc[0] += partial(m, j)
+VU    FMA sp_tgt=RESULT, … → SPSU STU ; SYNC put → ncsu → NCSU SYNC get     store j+1 (2·3은 아무도 안 읽음)
+
+── D. 최종 저장 ─────────────────────────────────────────────────────────────────────────
+NCSU  SYNC get ← spsu0 (store 4) ; STSU src0=SAR11, … ; SYNC put → nclu    SP 0x419 → SHM 0x110+m
+NCLU  SYNC {dir.get=1, lsync_mask.ncsu=1}
+
+── E. 종료 ──────────────────────────────────────────────────────────────────────────────
+NCLU ⇄ NCSU  SYNC {dir.get=1, dir.put=1, …}                          DNC 안의 fence
+NCLU  MESYNC get dnc0..7 ; MESYNC get+put dnc8 ; MESYNC put dnc0..7   cluster barrier</pre>
+  <p class="note"><span class="m">sync_mask.dncj</span>는 j에 따라 dnc1, dnc2, dnc3입니다. leaf (m, j)가 쓰는 주소 0x113 + 3m + j는 이 이미지의 DNC 0·1(0x114, root가 읽는 0x114–0x116)과, 같은 kernel을 최신 mcc로 빌드한 16개 이미지 전체에서 확인한 규칙(그룹마다 3줄씩, 시작 주소만 다름)에서 나온 것입니다.</p>
 </section>
 
 <section>
