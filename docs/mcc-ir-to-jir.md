@@ -1,17 +1,20 @@
 # mcc IRs from the kpl declaration down to JIR
 
 - Base: `codesigner` `origin/dev` at `0513ef38f` (2026-10-20). Paths are relative to `PrimitiveAuthor/mcc/`.
-- Method: three perf cases were built with spies on the `spine` passes and every level was printed.
+- Method: four perf cases were built with spies on the `spine` passes and every level was printed.
   - `tests/perf/add_elementwise/1x16x2x64`: streaming, 16 DNCs.
   - `tests/perf/rms_norm/r1_k2048`: streaming reduce followed by a second pass, 1 DNC.
   - `tests/perf/dense/m128_k64_n64`: systolic, 16 DNCs (shows `mseq_matmul`).
+  - `tests/perf/dense/m4_k256_n64` (Llama `down_proj`): systolic with a K split over 4 DNCs, so it shows the cross-DNC
+    `Reduce`. Built from `codesigner` `dnc-binutils-legacy-dir` at `082b42cfa` (2026-10-21) with `reduce.py`.
 - The scripts and full dumps are in [`mcc-ir-dump/`](mcc-ir-dump/).
   - `dump.py` wraps the `spine` functions and collects their arguments and results.
   - `pp.py` is a compact printer for `Mseq`, `Mpn`, `UnitProgram` and `FabricProgram`. The repo has no printer for them.
-  - `all.py` prints every level; `ini.py` prints the systolic initial IR.
+  - `all.py` prints every level; `ini.py` prints the systolic initial IR; `reduce.py` adds the root's and a leaf's
+    `Mseq` and the reduce units' full `Mpn` processes.
   - Run from `PrimitiveAuthor/mcc`: `uv run python ~/workspaces/docs/mcc-ir-dump/all.py tests/perf/<case> [mseq_line_limit]`.
   - Full output: [`mcc-ir-dump/add.txt`](mcc-ir-dump/add.txt), [`mcc-ir-dump/rms.txt`](mcc-ir-dump/rms.txt),
-    [`mcc-ir-dump/dense.txt`](mcc-ir-dump/dense.txt).
+    [`mcc-ir-dump/dense.txt`](mcc-ir-dump/dense.txt), [`mcc-ir-dump/down_proj.txt`](mcc-ir-dump/down_proj.txt).
 - Related, older notes: [`mcc-internals.md`](mcc-internals.md), [`mcc-hgdg-jir-sqrt.md`](mcc-hgdg-jir-sqrt.md).
 
 ## 1. The levels, top to bottom
@@ -314,8 +317,113 @@ passes = (('TU', (ComputeOperands(combine='mul', reduce='add', stationary='north
   The templates hold `ir/nodes.py` nodes such as `_Frame axes=('Bmb','Br','Bout')`, `_Loop kind=axis axes=('Bout',)`
   and `_Vocab sp_immc {...}`.
 
+### 3.4 dense m4_k256_n64 (`down_proj`: K split over DNCs, cross-DNC `Reduce`)
+
+`x[4,256] @ w[256,64]`. M has only 4 rows, so mcc shards M over 4 DNCs and splits K over 4 more, and the partials
+of each M row are summed across DNCs.
+
+```
+format_tiled (excerpt): card ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west')
+  spatial dnc[16] = shard.M[4] × split.K.beat[4]
+    role root (  4 dnc): gather[3] → acc, depth=4, monoid=add, egress
+    role leaf ( 12 dnc): partial → root, no egress
+  temporal loop K.bin[1] (degenerate)
+    LEAF N=64:lane · M=1:line, reduce K.col[8] × K.beat[8] (leaf_K=64)
+  accumulate acc_edge ('VU','VU','acc') monoid=add cadence={'accum': 4, 'npass': 1}
+Mdmap(levels=(Level(axis='M', count=4, kind='shard'), Level(axis='K', count=4, kind='reduce')))
+unit_layouts (excerpt):
+  ('XVU','TU','w')    -> [N=64:1λ K=64:1L]·SP @kernel
+  ('ABSU','ABLU','x') -> [M=1:1λ K.grp=8:8L K.in=8:1L]·SP @ab_bank
+  ('ABLU','TU','x')   -> [M=1:1λ K.grp=8:8L K.in=8:-1L]·SP @ab_bank
+```
+
+`Mseq` for DNC 0, a root (`grid=(('M', 4, 0), ('K', 4, 0))`; TU rows 1 to 6 trimmed). It is the dense pass of 3.3
+with M = 1 padded to the 4-row tile, then a `Reduce` chunk and the store:
+
+```
+Mseq dnc=0 op=matmul tensors=('x', 'w', 'y')  grid=(('M', 4, 0), ('K', 4, 0))
+  Pass lo=0 n=0
+    Chunk: Dma load  w shm[18:+64] -> nc0.sp[984:+64]
+           Stage SPLU0 w -> XVU ; Loop[run] x64: Compute XVU0 op=pass -> TU:0
+           Compute TU:00 op=tu_prime pop=w[0..7] ; Loop[run] x56: Compute TU:00 op=pass -> TU:1 ; … TU:70 tu_prime
+    Chunk: Dma load  x shm[1:+1] -> nc0.sp[1048:+1]
+           Stage SPLU0 x sp[1048..1051] -> XVU toks=x[0,0,0], x['pad',…,1,0], x['pad',…,2,0], x['pad',…,3,0]
+           Compute XVU0 op=pass -> ABSU (×4) ; Write ABSU0 a sp[0,1,2,3] <- XVU
+    Chunk: Stage ABLU:00 a -> TU:0 lanes=(0,4) ; Stage ABLU:00 a -> TU:0 lanes=(4,4)
+           Compute TU:00 op=tu_mac ; Compute TU:00 op=tu_drain -> TU:1 ; Loop[run] x6 (TU:1..TU:6) ; TU:70 tu_drain -> VU
+           Compute VU0 op=accumulate pop=t[7,0,…] push=s[0,…] -> SPSU
+           Write SPSU0 y sp[1049..1052] <- VU
+    Chunk: Reduce group=(0, 1, 2, 3) inst=0 band=y op=add units=('SPLU', 'VU', 'SPSU') parts=1
+    Chunk: Dma store y shm[277:+1] <- nc0.sp[1049:+1]
+  Fence dncs=0..15
+```
+
+DNC 1, a leaf (`grid=(('M', 4, 0), ('K', 4, 1))`), differs in its slices (`w shm[82:+64]`, `x shm[5:+1]`), writes band
+`q` instead of `y`, and has the same `Reduce` chunk but no `Dma store` of `y`.
+
+The `Reduce` is a single node in the `Mseq`. `split_chip` lowers it into the root's and the leaves' processes. The
+`Mpn` addresses are the build's own block-packed placement (x 0, w 16, out 272, partials 276..), not the manifest's
+that the addressed `Mseq` above shows.
+
+```
+Mpn dnc=0 (root), the reduce part of each process:
+  NCLU   Get <- (1,'NCSU') ; Dma load q shm[276:+1] -> sp[1057] ; Put -> SPLU0 ; Put -> (1,'NCSU')
+         Get <- (2,'NCSU') ; Dma load q shm[277:+1] -> sp[1058] ; Put -> SPLU0 ; Put -> (2,'NCSU')
+         Get <- (3,'NCSU') ; Dma load q shm[278:+1] -> sp[1059] ; Put -> SPLU0 ; Put -> (3,'NCSU')
+  SPLU0  Get <- NCLU ; Stage q sp[1057..1060] -> VU   (line 0 = partial of DNC 1, lines 1..3 'pad')
+         Get <- NCLU ; Stage q sp[1058..1061] -> VU   (DNC 2)
+         Get <- NCLU ; Stage q sp[1059..1062] -> VU   (DNC 3)
+  VU0    accumulate pop=t[7,…] (own TU) ; accumulate pop=q[1] ; pop=q[2] ; pop=q[3]   each push=s[i] -> SPSU
+  SPSU0  Write y sp[1049..1052] ×4 ; Put -> NCSU
+  NCSU   Get <- SPSU0 ; Dma store y shm[272:+1] <- sp[1049] ; Fence
+Mpn dnc=1 (leaf) NCSU:
+         Get <- SPSU0 ; Dma store q shm[276:+1] <- sp[1049] ; Put -> (0,'NCLU') ; Get <- (0,'NCLU') ; Fence
+FabricProgram units=256 reduces=True reduce_monoid=add mesync=ClusterBarrier
+  edges[12]: Reduce ('NCSU', 1)->('NCLU', 0), ('NCSU', 2)->('NCLU', 0), ('NCSU', 3)->('NCLU', 0), ('NCSU', 5)->('NCLU', 4), …
+```
+
+The `(dnc, 'unit')` peers become `MESYNC`s, `Put`/`Get` with a same-DNC peer become `SYNC`s, and the
+`edges[12]` are the 3 leaves of each of the 4 groups.
+
+#### How the reduction works
+
+- **Grouping.** `Mdmap` levels `M shard 4 × K reduce 4` give `d = 4m + k`. The 4 DNCs with the same `m` form a group;
+  the one with `k = 0` is the root (`star_reduce`: one level, the root gathers every leaf).
+- **Every DNC** computes its partial `x[m, 64k:+64] @ w[64k:+64, :]` on a 4-row tile (row 0 real, 3 padding),
+  accumulates it in the VU and stores it to SP through the SPSU.
+- **A leaf** stores its line 0 to its SHM slot (`q`, line `276 + 3m + (k − 1)` in the block-packed placement), then
+  `MESYNC`s with its root: put "ready", get "taken".
+- **The root**, for each leaf in order: waits for "ready", loads that slot into SP, signals its SPLU, releases the
+  leaf. The SPLU pushes a 4-line window starting at that partial; the VU adds it to the accumulator still holding the
+  root's own partial; the SPSU rewrites the same 4 SP lines after every step.
+- **Egress.** After the last step the root's NCSU stores SP line 0 (`out[m, :]`) to SHM. Leaves have no egress.
+- **Fence.** All 16 DNCs close with the cluster barrier (`Fence dncs=0..15`).
+
+#### Mapping
+
+```
+                 k = 0 (root)          k = 1              k = 2              k = 3
+              K = 0..63             K = 64..127        K = 128..191       K = 192..255
+ m = 0  ┌──────────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+ x[0,:] │ DNC 0            │  │ DNC 1        │  │ DNC 2        │  │ DNC 3        │
+        │ TU: x·w partial  │  │ TU: partial  │  │ TU: partial  │  │ TU: partial  │
+        │ VU acc  ◀────────┼──┤ NCSU→SHM 276 │  │ NCSU→SHM 277 │  │ NCSU→SHM 278 │
+        │  += 276,277,278  │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
+        │ NCSU → SHM 272   │◀────────┴── MESYNC + NCLU load, one leaf at a time ──┘
+        └──────────────────┘
+ m = 1   DNC 4 (root)  ◀── DNC 5, 6, 7    slots 279..281   out 273
+ m = 2   DNC 8 (root)  ◀── DNC 9, 10, 11  slots 282..284   out 274     (cluster 1)
+ m = 3   DNC 12 (root) ◀── DNC 13, 14, 15 slots 285..287   out 275     (cluster 1)
+
+ per DNC:  SHM ─NCLU─▶ SP ─SPLU─▶ XVU ─┬─▶ TU north (w, 64 lines)
+                                       └─▶ ABSU ─▶ AB ─▶ ABLU ─▶ TU west (x, 4-row tile)
+           TU row 7 ─▶ VU (acc) ─▶ SPSU ─▶ SP ─NCSU─▶ SHM (leaf: slot, root: out after the gather)
+```
+
+Slots and outputs are in the `Mpn`'s block-packed lines; groups never cross an 8-DNC cluster.
+
 ## 4. Not covered
 
-- No mseq was printed for flash_attn, the softmax op itself, or a cross-DNC `Reduce` (a K split); the three examples
-  have none. The rows above for those come from the code and docstrings.
+- No mseq was printed for flash_attn or the softmax op itself; the rows above for those come from the code and
+  docstrings. The cross-DNC `Reduce` is printed in 3.4.
 - `kpl.decl.Level` (KernelLanguage `src/kpl/decl.py`) was checked only through its repr.

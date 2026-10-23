@@ -199,7 +199,8 @@ would be guesses.
 These follow from the problems above; none is designed yet.
 
 - **One logical program per DNC.** A front that writes an operation once, as a single stream or a small dataflow
-  graph, and derives every unit's program and every sync from it, so count balance holds by construction.
+  graph, and derives every unit's program and every sync from it, so count balance holds by construction. The appendix of
+  [`mlir-machine-ir.md`](mlir-machine-ir.md) sketches this for `down_proj`.
 - **Regions as a first-class IR level.** Make pipelined regions, their buffers and the tokens between them
   explicit, so the cost of a unit used twice, or of a credit, is visible and chosen rather than incidental.
 - **Collective operations with grid axes.** `grid.reduce %p axes=[k] root=(k=0)` and friends, lowered to star,

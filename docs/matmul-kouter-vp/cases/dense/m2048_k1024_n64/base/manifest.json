@@ -1,0 +1,98 @@
+{
+  "source": {
+    "generator": "rebel_compute_lib2",
+    "commit": "5e1413153067d4d3dc593595bb651a7b9d06bf84",
+    "dirty": false,
+    "test": "tests/src/develop/rebel/alpha_evt1/test_rbln_initgen_dense_fp16.py, with the arguments capture_rcl2.py sets",
+    "device_mode": "rebel_evt1",
+    "shapes": "input <1x16x2048x64> kernel <16x1x64x64> output <1x1x2048x64> scale <1x1x1x64> offset <1x1x1x64>"
+  },
+  "vp": {
+    "binary": "260521_vp_rebel_evt1_arbcal",
+    "ncluster": 2,
+    "ndnc_per_cluster": 8,
+    "timeout_cycles": 125000,
+    "log_level": 2,
+    "print_level": 0,
+    "skip_tu": false,
+    "shm_2mb_intrv": true,
+    "init_pos": "0x3f8000",
+    "shm_bus_ghz": 1.9
+  },
+  "shm": {
+    "seed": 0,
+    "blocks": [
+      {
+        "comment": "mem-map for input::DLFP16 pre-invalid memory access check dummy value",
+        "start": 0,
+        "lines": 1,
+        "fill": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "role": "guard"
+      },
+      {
+        "comment": "mem-map for input::DLFP16",
+        "start": 1,
+        "lines": 32768,
+        "tensor": "input",
+        "dtype": "DLFP16",
+        "role": "input"
+      },
+      {
+        "comment": "mem-map for input::DLFP16 post-invalid memory access check dummy value",
+        "start": 32769,
+        "lines": 1,
+        "fill": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "role": "guard"
+      },
+      {
+        "comment": "mem-map for kernel::DLFP16",
+        "start": 32770,
+        "lines": 1024,
+        "tensor": "kernel",
+        "dtype": "DLFP16",
+        "role": "input"
+      },
+      {
+        "comment": "mem-map for scale::DLFP16",
+        "start": 33794,
+        "lines": 1,
+        "tensor": "scale",
+        "dtype": "DLFP16",
+        "fill": "3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00 3e003e003e003e003e003e003e003e00",
+        "role": "input"
+      },
+      {
+        "comment": "mem-map for offset::DLFP16",
+        "start": 33795,
+        "lines": 1,
+        "tensor": "offset",
+        "dtype": "DLFP16",
+        "fill": "00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000 00000000000000000000000000000000",
+        "role": "input"
+      },
+      {
+        "comment": "mem-map for output::DLFP16 pre-invalid memory access check dummy value",
+        "start": 33796,
+        "lines": 1,
+        "fill": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "role": "guard"
+      },
+      {
+        "comment": "mem-map for output::DLFP16",
+        "start": 33797,
+        "lines": 2048,
+        "tensor": "output",
+        "dtype": "DLFP16",
+        "fill": "dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba dcbadcbadcbadcbadcbadcbadcbadcba",
+        "role": "output"
+      },
+      {
+        "comment": "mem-map for output::DLFP16 post-invalid memory access check dummy value",
+        "start": 35845,
+        "lines": 1,
+        "fill": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "role": "guard"
+      }
+    ]
+  }
+}
