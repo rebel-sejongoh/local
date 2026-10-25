@@ -27,15 +27,15 @@ def spy(mod, name, key=None):
     setattr(mod, name, f)
 
 spy(mdmap_stream, "plan")
-spy(mpn_syncs, "mapped")
+spy(spine, "_run")
 spy(spine, "passes")
 spy(spine, "derive_unit")
 spy(spine, "collect_programs")
 spy(spine, "with_edges")
-spy(spine, "fold_templates")
 spy(spine, "bind_templates")
 spy(spine, "synthesize")
 spy(spine, "realize")
 built = kpl_declaration.build(k.MAIN, addresses, red_addr=last["start"] + last["lines"] + 1, hw=hw)
 print("images", [len(x) for x in built.dnc_images])
+CAP["mapped"] = [(a, kw, r[0]) for a, kw, r in CAP["_run"]]
 globals()["K"] = k

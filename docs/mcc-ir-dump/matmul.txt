@@ -1,0 +1,461 @@
+
+######## Expr DAG
+  x:in[M,K]
+  w:in[K,N]
+  mul1=mul(x,w)
+  red2=reduce.add[K](mul1)
+  y=mul(red2,0.125)
+
+######## format_tiled
+tiled.trace  _systolic  N=64 M=128 K=64        kind=systolic  units=ABLU,ABSU,NCLU,NCSU,TU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        x:[M,K]                                       
+        w:[K,N]                                       
+        mul1 = mul(x, w)                              
+        red2 = reduce.add(mul1)                       
+        y = mul(red2)                                   → out
+        card  ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west')
+        roles lane=N  shard=M  contract=K
+
+  spatial
+        dnc[16] = shard.M[16] × split.K.beat[1]
+        ncore[2]  (within each dnc)
+
+  temporal
+    loop K.bin[1]   (degenerate)
+      LEAF  N=64:lane · M=4:line
+              reduce K.col[8] × K.beat[8]   (leaf_K=64)
+
+  buffers
+        SP:kernel     w    @NCLU
+        SP:ab_bank    x    @NCLU
+        SP:tu_psum    y    @TU
+        SP:vu_acc     acc  @VU
+
+  accumulate
+        acc_edge None   monoid=add   cadence={'accum': 1, 'npass': 1}   temporal_depth=1
+
+  covers
+        N     lane   leaf 64  (whole-tensor) × laneblk 1         ✓  laneblk 1 × 1 N slices × lane_width 64 brackets extent 64? (expected ceil(64/64)=1)
+        M     shard  leaf 4 × shard_extent 128                   ✓  shard_extent 128 vs extent 128
+        K     split  leaf 64 × split 1 × bin 1                   ✓  reduce_size 1 × atom 64 × bin 1 = 64, extent 64
+
+######## TracedOp.arith (card on the TU, epilogue on the drain unit)
+  TU: ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west')
+  VU: (Expr(name='y', kind='map', deps=('red2',), axes=(), axis=None, monoid=None, op='mul', imm=0.125, out=True, off=None, along=None, sel=None, access=(), base=None),)
+
+######## mseq_matmul.chip inputs: m=128 k=64 n=64
+  TilingDecision {'shard_extent': 128}
+  derived {'per_dnc_rows': 8, 'tile_rows': 8, 'numncores': 2, 'ncore_rows': 4, 'active_dncs': 16, 'sp_banks': 2}
+  Mdmap Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=128, count=16, tie_break='first'))
+  arith {'TU': (ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'),), 'VU': (Expr(name='y', kind='map', deps=('red2',), axes=(), axis=None, monoid=None, op='mul', imm=0.125, out=True, off=None, along=None, sel=None, access=(), base=None),)}
+
+######## Mseq[0] (addressed)
+Mseq dnc=0 op=matmul tensors=('x', 'w', 'y')
+  ranks={} grid=(('M', 16, 0),) problems={}
+  Pass lo=0 n=0
+    Chunk lo=0 n=0
+      Dma load  w shm[128:+64] -> nc0.sp[984:+64]
+      Loop[run] x2 slots={'w': 0} tokens={'w': (0, 0, 1), 'wp': (0, 0, 1)} ncs=1
+        Stage SPLU0 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+61
+        Loop[run] x64 tokens={'w': 1}
+          Compute XVU0 op=pass pop=w[0, 0, 0] push=w[0, 0, 0] -> TU:0 arith=()
+        Compute TU:00 op=tu_prime pop=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x56 tokens={'w': 1}
+          Compute TU:00 op=pass pop=w[8, 0, 0] push=w[8, 0, 0] -> TU:1 arith=()
+        Compute TU:10 op=tu_prime pop=w[8, 0, 0],w[9, 0, 0],w[10, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x48 tokens={'w': 1}
+          Compute TU:10 op=pass pop=w[16, 0, 0] push=w[16, 0, 0] -> TU:2 arith=()
+        Compute TU:20 op=tu_prime pop=w[16, 0, 0],w[17, 0, 0],w[18, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x40 tokens={'w': 1}
+          Compute TU:20 op=pass pop=w[24, 0, 0] push=w[24, 0, 0] -> TU:3 arith=()
+        Compute TU:30 op=tu_prime pop=w[24, 0, 0],w[25, 0, 0],w[26, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x32 tokens={'w': 1}
+          Compute TU:30 op=pass pop=w[32, 0, 0] push=w[32, 0, 0] -> TU:4 arith=()
+        Compute TU:40 op=tu_prime pop=w[32, 0, 0],w[33, 0, 0],w[34, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x24 tokens={'w': 1}
+          Compute TU:40 op=pass pop=w[40, 0, 0] push=w[40, 0, 0] -> TU:5 arith=()
+        Compute TU:50 op=tu_prime pop=w[40, 0, 0],w[41, 0, 0],w[42, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x16 tokens={'w': 1}
+          Compute TU:50 op=pass pop=w[48, 0, 0] push=w[48, 0, 0] -> TU:6 arith=()
+        Compute TU:60 op=tu_prime pop=w[48, 0, 0],w[49, 0, 0],w[50, 0, 0],..+5 push= -> None arith=()
+        Loop[run] x8 tokens={'w': 1}
+          Compute TU:60 op=pass pop=w[56, 0, 0] push=w[56, 0, 0] -> TU:7 arith=()
+        Compute TU:70 op=tu_prime pop=w[56, 0, 0],w[57, 0, 0],w[58, 0, 0],..+5 push= -> None arith=()
+    Chunk lo=0 n=0
+      Loop[run] x8 lines={'x': 1} slots={'x': 1}
+        Dma load  x shm[0:+1] -> nc0.sp[1048:+1]
+      Loop[run] x2 slots={'x': 4} tokens={('x', 'pad'): (0, 0, 1, 0, 0), 'x': (4, 0, 0)} ncs=1
+        Stage SPLU0 x sp[1048, 1049, 1050, 1051] -> XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+        Loop[run] x4 tokens={'x': 1}
+          Compute XVU0 op=pass pop=x[0, 0, 0] push=x[0, 0, 0] -> ABSU arith=()
+        Write ABSU0 a sp[0, 1, 2, 3] <- XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+    Chunk lo=0 n=0
+      Loop[run] x2 slots={'y': 4} tokens={'a': (0, 0, (0, 0, 1, 0)), 't': (0, 0, (0, 0, 1, 0)), 's': (0, (0, 0, 1, 0)), 'p': ((0, 0, 1, 0),)} ncs=1
+        Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 lanes=(0, 4)
+        Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 lanes=(4, 4)
+        Compute TU:00 op=tu_mac pop=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute TU:00 op=tu_drain pop=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 push=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+1 -> TU:1 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Loop[run] x6 tokens={'a': 1, 't': 1} rows=1
+          Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 0],a[1, 0, (0, 0, 0, 1), 0],a[1, 0, (0, 0, 0, 2), 0],..+1 lanes=(8, 4)
+          Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 lanes=(12, 4)
+          Compute TU:10 op=tu_mac pop=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+          Compute TU:10 op=tu_drain pop=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 push=t[1, 0, (0, 0, 0, 0)],t[1, 0, (0, 0, 0, 1)],t[1, 0, (0, 0, 0, 2)],..+1 -> TU:2 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 0],a[7, 0, (0, 0, 0, 1), 0],a[7, 0, (0, 0, 0, 2), 0],..+1 lanes=(56, 4)
+        Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 lanes=(60, 4)
+        Compute TU:70 op=tu_mac pop=t[6, 0, (0, 0, 0, 0)],t[6, 0, (0, 0, 0, 1)],t[6, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute TU:70 op=tu_drain pop=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 push=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+        Compute VU0 op=accumulate pop=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 push=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1 -> SPSU arith=(y=mul(red2,0.125))
+        Write SPSU0 y sp[1056, 1057, 1058, 1059] <- VU toks=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1
+    Chunk lo=0 n=0
+      Loop[run] x8 lines={'y': 1} slots={'y': 1}
+        Dma store y shm[192:+1] <- nc0.sp[1056:+1]
+  Fence dncs=0..15
+
+######## Mpn[0]: 44 processes, 76 channels
+  (0, 'SPLU0') -> (0, 'XVU0') FIFO/backpressure depth=None
+  (0, 'XVU0') -> (0, 'TU0:0') FIFO/backpressure depth=None
+  (0, 'TU0:0') -> (0, 'TU0:1') FIFO/backpressure depth=None
+  (0, 'TU0:1') -> (0, 'TU0:2') FIFO/backpressure depth=None
+  (0, 'TU0:2') -> (0, 'TU0:3') FIFO/backpressure depth=None
+  (0, 'TU0:3') -> (0, 'TU0:4') FIFO/backpressure depth=None
+  (0, 'TU0:4') -> (0, 'TU0:5') FIFO/backpressure depth=None
+  (0, 'TU0:5') -> (0, 'TU0:6') FIFO/backpressure depth=None
+  (0, 'TU0:6') -> (0, 'TU0:7') FIFO/backpressure depth=None
+  (0, 'SPLU1') -> (0, 'XVU1') FIFO/backpressure depth=None
+  (0, 'XVU1') -> (0, 'TU1:0') FIFO/backpressure depth=None
+  (0, 'TU1:0') -> (0, 'TU1:1') FIFO/backpressure depth=None
+  (0, 'TU1:1') -> (0, 'TU1:2') FIFO/backpressure depth=None
+  (0, 'TU1:2') -> (0, 'TU1:3') FIFO/backpressure depth=None
+  (0, 'TU1:3') -> (0, 'TU1:4') FIFO/backpressure depth=None
+  (0, 'TU1:4') -> (0, 'TU1:5') FIFO/backpressure depth=None
+  (0, 'TU1:5') -> (0, 'TU1:6') FIFO/backpressure depth=None
+  (0, 'TU1:6') -> (0, 'TU1:7') FIFO/backpressure depth=None
+  (0, 'XVU0') -> (0, 'ABSU0') FIFO/backpressure depth=None
+  (0, 'XVU1') -> (0, 'ABSU1') FIFO/backpressure depth=None
+  (0, 'ABLU0:0') -> (0, 'TU0:0') FIFO/backpressure depth=None
+  (0, 'ABLU0:1') -> (0, 'TU0:1') FIFO/backpressure depth=None
+  (0, 'ABLU0:2') -> (0, 'TU0:2') FIFO/backpressure depth=None
+  (0, 'ABLU0:3') -> (0, 'TU0:3') FIFO/backpressure depth=None
+  (0, 'ABLU0:4') -> (0, 'TU0:4') FIFO/backpressure depth=None
+  (0, 'ABLU0:5') -> (0, 'TU0:5') FIFO/backpressure depth=None
+  (0, 'ABLU0:6') -> (0, 'TU0:6') FIFO/backpressure depth=None
+  (0, 'ABLU0:7') -> (0, 'TU0:7') FIFO/backpressure depth=None
+  (0, 'TU0:7') -> (0, 'VU0') FIFO/backpressure depth=None
+  (0, 'VU0') -> (0, 'SPSU0') FIFO/backpressure depth=None
+  (0, 'ABLU1:0') -> (0, 'TU1:0') FIFO/backpressure depth=None
+  (0, 'ABLU1:1') -> (0, 'TU1:1') FIFO/backpressure depth=None
+  (0, 'ABLU1:2') -> (0, 'TU1:2') FIFO/backpressure depth=None
+  (0, 'ABLU1:3') -> (0, 'TU1:3') FIFO/backpressure depth=None
+  (0, 'ABLU1:4') -> (0, 'TU1:4') FIFO/backpressure depth=None
+  (0, 'ABLU1:5') -> (0, 'TU1:5') FIFO/backpressure depth=None
+  (0, 'ABLU1:6') -> (0, 'TU1:6') FIFO/backpressure depth=None
+  (0, 'ABLU1:7') -> (0, 'TU1:7') FIFO/backpressure depth=None
+  (0, 'TU1:7') -> (0, 'VU1') FIFO/backpressure depth=None
+  (0, 'VU1') -> (0, 'SPSU1') FIFO/backpressure depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:0') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:1') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:2') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:3') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:4') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:5') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:6') SP/put/get depth=None
+  (0, 'ABSU0') -> (0, 'ABLU0:7') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:0') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:1') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:2') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:3') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:4') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:5') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:6') SP/put/get depth=None
+  (0, 'ABSU1') -> (0, 'ABLU1:7') SP/put/get depth=None
+  (0, 'NCLU') -> (0, 'SPLU0') SP/put/get depth=16
+  (0, 'NCLU') -> (0, 'SPLU1') SP/put/get depth=16
+  (0, 'SPSU0') -> (0, 'NCSU') SP/put/get depth=16
+  (0, 'SPSU1') -> (0, 'NCSU') SP/put/get depth=16
+  (0, 'ABLU0:0') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:1') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:2') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:3') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:4') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:5') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:6') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU0:7') -> (0, 'ABSU0') SP/credit depth=4
+  (0, 'ABLU1:0') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:1') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:2') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:3') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:4') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:5') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:6') -> (0, 'ABSU1') SP/credit depth=4
+  (0, 'ABLU1:7') -> (0, 'ABSU1') SP/credit depth=4
+
+######## Scripts dnc 0
+Script NCLU dnc=0 counts={} ahead=0 behind=5
+  Dma load  w shm[128:+64] -> nc0.sp[984:+64]
+  Sync put splu0,splu1
+  Rep i5 x8 unit=run
+    Dma load  x shm[i5:+1] -> nc0.sp[1048 + i5:+1]
+  Sync put splu0,splu1
+  Sync get ncsu
+  Sync putget ncsu
+  Sync get nclu dncs=(0, 1, 2, 3, 4, 5, 6, 7)
+  Sync putget nclu dncs=(8,)
+  Sync put nclu dncs=(0, 1, 2, 3, 4, 5, 6, 7)
+Script SPLU0 dnc=0 counts={} ahead=0 behind=0
+  Sync get nclu
+  Stage SPLU0 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+61
+  Sync get nclu
+  Stage SPLU0 x sp[1048, 1049, 1050, 1051] -> XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+Script XVU0 dnc=0 counts={} ahead=0 behind=0
+  Rep i2 x64 unit=run
+    Compute XVU0 op=pass pop=w[i2, 0, 0] push=w[i2, 0, 0] -> TU:0 arith=()
+  Rep i7 x4 unit=run
+    Compute XVU0 op=pass pop=x[i7, 0, 0] push=x[i7, 0, 0] -> ABSU arith=()
+Script ABSU0 dnc=0 counts={} ahead=0 behind=1
+  Write ABSU0 a sp[0, 1, 2, 3] <- XVU toks=x[0, 0, 0],x[1, 0, 0],x[2, 0, 0],..+1
+  Sync put ablu
+  Sync get ablu
+Script ABLU0:0 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i9 x2 unit=None
+    Stage ABLU:00 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 0, 0), i9],a[0, 0, (0, 0, 0, 1), i9],a[0, 0, (0, 0, 0, 2), i9],..+1 lanes=(4*i9, 4)
+Script ABLU0:1 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:10 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 0, 0), i11],a[1, 0, (0, 0, 0, 1), i11],a[1, 0, (0, 0, 0, 2), i11],..+1 lanes=(8 + 4*i11, 4)
+Script ABLU0:2 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:20 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 0, 0), i11],a[2, 0, (0, 0, 0, 1), i11],a[2, 0, (0, 0, 0, 2), i11],..+1 lanes=(16 + 4*i11, 4)
+Script ABLU0:3 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:30 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 0, 0), i11],a[3, 0, (0, 0, 0, 1), i11],a[3, 0, (0, 0, 0, 2), i11],..+1 lanes=(24 + 4*i11, 4)
+Script ABLU0:4 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:40 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 0, 0), i11],a[4, 0, (0, 0, 0, 1), i11],a[4, 0, (0, 0, 0, 2), i11],..+1 lanes=(32 + 4*i11, 4)
+Script ABLU0:5 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:50 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 0, 0), i11],a[5, 0, (0, 0, 0, 1), i11],a[5, 0, (0, 0, 0, 2), i11],..+1 lanes=(40 + 4*i11, 4)
+Script ABLU0:6 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:60 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 0, 0), i11],a[6, 0, (0, 0, 0, 1), i11],a[6, 0, (0, 0, 0, 2), i11],..+1 lanes=(48 + 4*i11, 4)
+Script ABLU0:7 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i12 x2 unit=None
+    Stage ABLU:70 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 0, 0), i12],a[7, 0, (0, 0, 0, 1), i12],a[7, 0, (0, 0, 0, 2), i12],..+1 lanes=(56 + 4*i12, 4)
+Script TU0:0 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:00 op=tu_prime pop=w[0, 0, 0],w[1, 0, 0],w[2, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x56 unit=run
+    Compute TU:00 op=pass pop=w[8 + i4, 0, 0] push=w[8 + i4, 0, 0] -> TU:1 arith=()
+  Compute TU:00 op=tu_mac pop=a[0, 0, (0, 0, 0, 0), 0],a[0, 0, (0, 0, 0, 1), 0],a[0, 0, (0, 0, 0, 2), 0],..+1 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:00 op=tu_drain pop=a[0, 0, (0, 0, 0, 0), 1],a[0, 0, (0, 0, 0, 1), 1],a[0, 0, (0, 0, 0, 2), 1],..+1 push=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+1 -> TU:1 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:1 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:10 op=tu_prime pop=w[8, 0, 0],w[9, 0, 0],w[10, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x48 unit=run
+    Compute TU:10 op=pass pop=w[16 + i4, 0, 0] push=w[16 + i4, 0, 0] -> TU:2 arith=()
+  Compute TU:10 op=tu_mac pop=t[0, 0, (0, 0, 0, 0)],t[0, 0, (0, 0, 0, 1)],t[0, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:10 op=tu_drain pop=a[1, 0, (0, 0, 0, 0), 1],a[1, 0, (0, 0, 0, 1), 1],a[1, 0, (0, 0, 0, 2), 1],..+1 push=t[1, 0, (0, 0, 0, 0)],t[1, 0, (0, 0, 0, 1)],t[1, 0, (0, 0, 0, 2)],..+1 -> TU:2 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:2 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:20 op=tu_prime pop=w[16, 0, 0],w[17, 0, 0],w[18, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x40 unit=run
+    Compute TU:20 op=pass pop=w[24 + i4, 0, 0] push=w[24 + i4, 0, 0] -> TU:3 arith=()
+  Compute TU:20 op=tu_mac pop=t[1, 0, (0, 0, 0, 0)],t[1, 0, (0, 0, 0, 1)],t[1, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:20 op=tu_drain pop=a[2, 0, (0, 0, 0, 0), 1],a[2, 0, (0, 0, 0, 1), 1],a[2, 0, (0, 0, 0, 2), 1],..+1 push=t[2, 0, (0, 0, 0, 0)],t[2, 0, (0, 0, 0, 1)],t[2, 0, (0, 0, 0, 2)],..+1 -> TU:3 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:3 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:30 op=tu_prime pop=w[24, 0, 0],w[25, 0, 0],w[26, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x32 unit=run
+    Compute TU:30 op=pass pop=w[32 + i4, 0, 0] push=w[32 + i4, 0, 0] -> TU:4 arith=()
+  Compute TU:30 op=tu_mac pop=t[2, 0, (0, 0, 0, 0)],t[2, 0, (0, 0, 0, 1)],t[2, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:30 op=tu_drain pop=a[3, 0, (0, 0, 0, 0), 1],a[3, 0, (0, 0, 0, 1), 1],a[3, 0, (0, 0, 0, 2), 1],..+1 push=t[3, 0, (0, 0, 0, 0)],t[3, 0, (0, 0, 0, 1)],t[3, 0, (0, 0, 0, 2)],..+1 -> TU:4 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:4 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:40 op=tu_prime pop=w[32, 0, 0],w[33, 0, 0],w[34, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x24 unit=run
+    Compute TU:40 op=pass pop=w[40 + i4, 0, 0] push=w[40 + i4, 0, 0] -> TU:5 arith=()
+  Compute TU:40 op=tu_mac pop=t[3, 0, (0, 0, 0, 0)],t[3, 0, (0, 0, 0, 1)],t[3, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:40 op=tu_drain pop=a[4, 0, (0, 0, 0, 0), 1],a[4, 0, (0, 0, 0, 1), 1],a[4, 0, (0, 0, 0, 2), 1],..+1 push=t[4, 0, (0, 0, 0, 0)],t[4, 0, (0, 0, 0, 1)],t[4, 0, (0, 0, 0, 2)],..+1 -> TU:5 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:5 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:50 op=tu_prime pop=w[40, 0, 0],w[41, 0, 0],w[42, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x16 unit=run
+    Compute TU:50 op=pass pop=w[48 + i4, 0, 0] push=w[48 + i4, 0, 0] -> TU:6 arith=()
+  Compute TU:50 op=tu_mac pop=t[4, 0, (0, 0, 0, 0)],t[4, 0, (0, 0, 0, 1)],t[4, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:50 op=tu_drain pop=a[5, 0, (0, 0, 0, 0), 1],a[5, 0, (0, 0, 0, 1), 1],a[5, 0, (0, 0, 0, 2), 1],..+1 push=t[5, 0, (0, 0, 0, 0)],t[5, 0, (0, 0, 0, 1)],t[5, 0, (0, 0, 0, 2)],..+1 -> TU:6 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:6 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:60 op=tu_prime pop=w[48, 0, 0],w[49, 0, 0],w[50, 0, 0],..+5 push= -> None arith=()
+  Rep i4 x8 unit=run
+    Compute TU:60 op=pass pop=w[56 + i4, 0, 0] push=w[56 + i4, 0, 0] -> TU:7 arith=()
+  Compute TU:60 op=tu_mac pop=t[5, 0, (0, 0, 0, 0)],t[5, 0, (0, 0, 0, 1)],t[5, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:60 op=tu_drain pop=a[6, 0, (0, 0, 0, 0), 1],a[6, 0, (0, 0, 0, 1), 1],a[6, 0, (0, 0, 0, 2), 1],..+1 push=t[6, 0, (0, 0, 0, 0)],t[6, 0, (0, 0, 0, 1)],t[6, 0, (0, 0, 0, 2)],..+1 -> TU:7 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU0:7 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:70 op=tu_prime pop=w[56, 0, 0],w[57, 0, 0],w[58, 0, 0],..+5 push= -> None arith=()
+  Compute TU:70 op=tu_mac pop=t[6, 0, (0, 0, 0, 0)],t[6, 0, (0, 0, 0, 1)],t[6, 0, (0, 0, 0, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:70 op=tu_drain pop=a[7, 0, (0, 0, 0, 0), 1],a[7, 0, (0, 0, 0, 1), 1],a[7, 0, (0, 0, 0, 2), 1],..+1 push=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script VU0 dnc=0 counts={} ahead=0 behind=0
+  Compute VU0 op=accumulate pop=t[7, 0, (0, 0, 0, 0)],t[7, 0, (0, 0, 0, 1)],t[7, 0, (0, 0, 0, 2)],..+1 push=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1 -> SPSU arith=(y=mul(red2,0.125))
+Script SPSU0 dnc=0 counts={} ahead=0 behind=0
+  Write SPSU0 y sp[1056, 1057, 1058, 1059] <- VU toks=s[0, (0, 0, 0, 0)],s[0, (0, 0, 0, 1)],s[0, (0, 0, 0, 2)],..+1
+  Sync put ncsu
+Script SPLU1 dnc=0 counts={} ahead=0 behind=0
+  Sync get nclu
+  Stage SPLU1 w sp[984, 985, 986, 987].. -> XVU toks=w[0, 0, 1],w[1, 0, 1],w[2, 0, 1],..+61
+  Sync get nclu
+  Stage SPLU1 x sp[1052, 1053, 1054, 1055] -> XVU toks=x[4, 0, 0],x[5, 0, 0],x[6, 0, 0],..+1
+Script XVU1 dnc=0 counts={} ahead=0 behind=0
+  Rep i2 x64 unit=run
+    Compute XVU1 op=pass pop=w[i2, 0, 1] push=w[i2, 0, 1] -> TU:0 arith=()
+  Rep i7 x4 unit=run
+    Compute XVU1 op=pass pop=x[4 + i7, 0, 0] push=x[4 + i7, 0, 0] -> ABSU arith=()
+Script ABSU1 dnc=0 counts={} ahead=0 behind=1
+  Write ABSU1 a sp[0, 1, 2, 3] <- XVU toks=x[4, 0, 0],x[5, 0, 0],x[6, 0, 0],..+1
+  Sync put ablu
+  Sync get ablu
+Script ABLU1:0 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i9 x2 unit=None
+    Stage ABLU:01 a sp[0, 1, 2, 3] -> TU:0 toks=a[0, 0, (0, 0, 1, 0), i9],a[0, 0, (0, 0, 1, 1), i9],a[0, 0, (0, 0, 1, 2), i9],..+1 lanes=(4*i9, 4)
+Script ABLU1:1 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:11 a sp[0, 1, 2, 3] -> TU:1 toks=a[1, 0, (0, 0, 1, 0), i11],a[1, 0, (0, 0, 1, 1), i11],a[1, 0, (0, 0, 1, 2), i11],..+1 lanes=(8 + 4*i11, 4)
+Script ABLU1:2 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:21 a sp[0, 1, 2, 3] -> TU:2 toks=a[2, 0, (0, 0, 1, 0), i11],a[2, 0, (0, 0, 1, 1), i11],a[2, 0, (0, 0, 1, 2), i11],..+1 lanes=(16 + 4*i11, 4)
+Script ABLU1:3 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:31 a sp[0, 1, 2, 3] -> TU:3 toks=a[3, 0, (0, 0, 1, 0), i11],a[3, 0, (0, 0, 1, 1), i11],a[3, 0, (0, 0, 1, 2), i11],..+1 lanes=(24 + 4*i11, 4)
+Script ABLU1:4 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:41 a sp[0, 1, 2, 3] -> TU:4 toks=a[4, 0, (0, 0, 1, 0), i11],a[4, 0, (0, 0, 1, 1), i11],a[4, 0, (0, 0, 1, 2), i11],..+1 lanes=(32 + 4*i11, 4)
+Script ABLU1:5 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:51 a sp[0, 1, 2, 3] -> TU:5 toks=a[5, 0, (0, 0, 1, 0), i11],a[5, 0, (0, 0, 1, 1), i11],a[5, 0, (0, 0, 1, 2), i11],..+1 lanes=(40 + 4*i11, 4)
+Script ABLU1:6 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i11 x2 unit=None
+    Stage ABLU:61 a sp[0, 1, 2, 3] -> TU:6 toks=a[6, 0, (0, 0, 1, 0), i11],a[6, 0, (0, 0, 1, 1), i11],a[6, 0, (0, 0, 1, 2), i11],..+1 lanes=(48 + 4*i11, 4)
+Script ABLU1:7 dnc=0 counts={} ahead=1 behind=0
+  Sync put absu
+  Sync get absu
+  Rep i12 x2 unit=None
+    Stage ABLU:71 a sp[0, 1, 2, 3] -> TU:7 toks=a[7, 0, (0, 0, 1, 0), i12],a[7, 0, (0, 0, 1, 1), i12],a[7, 0, (0, 0, 1, 2), i12],..+1 lanes=(56 + 4*i12, 4)
+Script TU1:0 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:01 op=tu_prime pop=w[0, 0, 1],w[1, 0, 1],w[2, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x56 unit=run
+    Compute TU:01 op=pass pop=w[8 + i4, 0, 1] push=w[8 + i4, 0, 1] -> TU:1 arith=()
+  Compute TU:01 op=tu_mac pop=a[0, 0, (0, 0, 1, 0), 0],a[0, 0, (0, 0, 1, 1), 0],a[0, 0, (0, 0, 1, 2), 0],..+1 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:01 op=tu_drain pop=a[0, 0, (0, 0, 1, 0), 1],a[0, 0, (0, 0, 1, 1), 1],a[0, 0, (0, 0, 1, 2), 1],..+1 push=t[0, 0, (0, 0, 1, 0)],t[0, 0, (0, 0, 1, 1)],t[0, 0, (0, 0, 1, 2)],..+1 -> TU:1 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:1 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:11 op=tu_prime pop=w[8, 0, 1],w[9, 0, 1],w[10, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x48 unit=run
+    Compute TU:11 op=pass pop=w[16 + i4, 0, 1] push=w[16 + i4, 0, 1] -> TU:2 arith=()
+  Compute TU:11 op=tu_mac pop=t[0, 0, (0, 0, 1, 0)],t[0, 0, (0, 0, 1, 1)],t[0, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:11 op=tu_drain pop=a[1, 0, (0, 0, 1, 0), 1],a[1, 0, (0, 0, 1, 1), 1],a[1, 0, (0, 0, 1, 2), 1],..+1 push=t[1, 0, (0, 0, 1, 0)],t[1, 0, (0, 0, 1, 1)],t[1, 0, (0, 0, 1, 2)],..+1 -> TU:2 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:2 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:21 op=tu_prime pop=w[16, 0, 1],w[17, 0, 1],w[18, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x40 unit=run
+    Compute TU:21 op=pass pop=w[24 + i4, 0, 1] push=w[24 + i4, 0, 1] -> TU:3 arith=()
+  Compute TU:21 op=tu_mac pop=t[1, 0, (0, 0, 1, 0)],t[1, 0, (0, 0, 1, 1)],t[1, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:21 op=tu_drain pop=a[2, 0, (0, 0, 1, 0), 1],a[2, 0, (0, 0, 1, 1), 1],a[2, 0, (0, 0, 1, 2), 1],..+1 push=t[2, 0, (0, 0, 1, 0)],t[2, 0, (0, 0, 1, 1)],t[2, 0, (0, 0, 1, 2)],..+1 -> TU:3 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:3 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:31 op=tu_prime pop=w[24, 0, 1],w[25, 0, 1],w[26, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x32 unit=run
+    Compute TU:31 op=pass pop=w[32 + i4, 0, 1] push=w[32 + i4, 0, 1] -> TU:4 arith=()
+  Compute TU:31 op=tu_mac pop=t[2, 0, (0, 0, 1, 0)],t[2, 0, (0, 0, 1, 1)],t[2, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:31 op=tu_drain pop=a[3, 0, (0, 0, 1, 0), 1],a[3, 0, (0, 0, 1, 1), 1],a[3, 0, (0, 0, 1, 2), 1],..+1 push=t[3, 0, (0, 0, 1, 0)],t[3, 0, (0, 0, 1, 1)],t[3, 0, (0, 0, 1, 2)],..+1 -> TU:4 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:4 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:41 op=tu_prime pop=w[32, 0, 1],w[33, 0, 1],w[34, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x24 unit=run
+    Compute TU:41 op=pass pop=w[40 + i4, 0, 1] push=w[40 + i4, 0, 1] -> TU:5 arith=()
+  Compute TU:41 op=tu_mac pop=t[3, 0, (0, 0, 1, 0)],t[3, 0, (0, 0, 1, 1)],t[3, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:41 op=tu_drain pop=a[4, 0, (0, 0, 1, 0), 1],a[4, 0, (0, 0, 1, 1), 1],a[4, 0, (0, 0, 1, 2), 1],..+1 push=t[4, 0, (0, 0, 1, 0)],t[4, 0, (0, 0, 1, 1)],t[4, 0, (0, 0, 1, 2)],..+1 -> TU:5 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:5 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:51 op=tu_prime pop=w[40, 0, 1],w[41, 0, 1],w[42, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x16 unit=run
+    Compute TU:51 op=pass pop=w[48 + i4, 0, 1] push=w[48 + i4, 0, 1] -> TU:6 arith=()
+  Compute TU:51 op=tu_mac pop=t[4, 0, (0, 0, 1, 0)],t[4, 0, (0, 0, 1, 1)],t[4, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:51 op=tu_drain pop=a[5, 0, (0, 0, 1, 0), 1],a[5, 0, (0, 0, 1, 1), 1],a[5, 0, (0, 0, 1, 2), 1],..+1 push=t[5, 0, (0, 0, 1, 0)],t[5, 0, (0, 0, 1, 1)],t[5, 0, (0, 0, 1, 2)],..+1 -> TU:6 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:6 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:61 op=tu_prime pop=w[48, 0, 1],w[49, 0, 1],w[50, 0, 1],..+5 push= -> None arith=()
+  Rep i4 x8 unit=run
+    Compute TU:61 op=pass pop=w[56 + i4, 0, 1] push=w[56 + i4, 0, 1] -> TU:7 arith=()
+  Compute TU:61 op=tu_mac pop=t[5, 0, (0, 0, 1, 0)],t[5, 0, (0, 0, 1, 1)],t[5, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:61 op=tu_drain pop=a[6, 0, (0, 0, 1, 0), 1],a[6, 0, (0, 0, 1, 1), 1],a[6, 0, (0, 0, 1, 2), 1],..+1 push=t[6, 0, (0, 0, 1, 0)],t[6, 0, (0, 0, 1, 1)],t[6, 0, (0, 0, 1, 2)],..+1 -> TU:7 arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script TU1:7 dnc=0 counts={} ahead=0 behind=0
+  Compute TU:71 op=tu_prime pop=w[56, 0, 1],w[57, 0, 1],w[58, 0, 1],..+5 push= -> None arith=()
+  Compute TU:71 op=tu_mac pop=t[6, 0, (0, 0, 1, 0)],t[6, 0, (0, 0, 1, 1)],t[6, 0, (0, 0, 1, 2)],..+5 push= -> None arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+  Compute TU:71 op=tu_drain pop=a[7, 0, (0, 0, 1, 0), 1],a[7, 0, (0, 0, 1, 1), 1],a[7, 0, (0, 0, 1, 2), 1],..+1 push=t[7, 0, (0, 0, 1, 0)],t[7, 0, (0, 0, 1, 1)],t[7, 0, (0, 0, 1, 2)],..+1 -> VU arith=(ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west'))
+Script VU1 dnc=0 counts={} ahead=0 behind=0
+  Compute VU1 op=accumulate pop=t[7, 0, (0, 0, 1, 0)],t[7, 0, (0, 0, 1, 1)],t[7, 0, (0, 0, 1, 2)],..+1 push=s[0, (0, 0, 1, 0)],s[0, (0, 0, 1, 1)],s[0, (0, 0, 1, 2)],..+1 -> SPSU arith=(y=mul(red2,0.125))
+Script SPSU1 dnc=0 counts={} ahead=0 behind=0
+  Write SPSU1 y sp[1060, 1061, 1062, 1063] <- VU toks=s[0, (0, 0, 1, 0)],s[0, (0, 0, 1, 1)],s[0, (0, 0, 1, 2)],..+1
+  Sync put ncsu
+Script NCSU dnc=0 counts={} ahead=0 behind=2
+  Sync get spsu0,spsu1
+  Rep i13 x8 unit=run
+    Dma store y shm[192 + i13:+1] <- nc0.sp[1056 + i13:+1]
+  Sync put nclu
+  Sync putget nclu
+
+######## UnitProgram VU dnc 0
+UnitProgram VU dnc=0 ncore=1 col=4 bd={'dnc': 0, 'ncore': 1}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[1] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [0, 12, 13, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (16 top-level nodes):
+    Tmpl FCMP {src0=16, src1=4, src2=10, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=0}
+    Tmpl IMMCOPY {typ1_imm=14336, replica=1, lrf_tgt=27, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=20, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=21, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=22, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=23, slice_en=255, be=0}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl FMA {src0=2, src1=14, src2=20, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=20}
+    Tmpl FMA {src0=20, src1=27, src2=10, out_nbr=0, out_sp=3, out_xvu=0, lrf_tgt=0}
+    Tmpl NOP {be=1}
+    Tmpl NOP {be=1}
+    Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=28, slice_en=255, be=0}
+UnitProgram VU dnc=0 ncore=0 col=4 bd={'dnc': 0, 'ncore': 0}
+  boundary[0]: 
+  env={}
+  lrf_raw[4] lccr_raw[1] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [0, 12, 13, 15], 'footprint': None} fold={'extent': 1, 'feed_units': ('XVU', 'ABLU', 'ABSU'), 'compute_unit': 'TU'} loop=None
+  template (16 top-level nodes):
+    Tmpl FCMP {src0=16, src1=4, src2=10, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=0}
+    Tmpl IMMCOPY {typ1_imm=14336, replica=1, lrf_tgt=27, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=20, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=21, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=22, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=23, slice_en=255, be=0}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl MVLOOPCNT {typ1_imm=1}
+    Tmpl FMA {src0=2, src1=14, src2=20, out_nbr=0, out_sp=0, out_xvu=0, lrf_tgt=20}
+    Tmpl FMA {src0=20, src1=27, src2=10, out_nbr=0, out_sp=3, out_xvu=0, lrf_tgt=0}
+    Tmpl NOP {be=1}
+    Tmpl NOP {be=1}
+    Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=28, slice_en=255, be=0}

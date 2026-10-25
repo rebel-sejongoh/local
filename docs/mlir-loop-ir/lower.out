@@ -1,0 +1,58 @@
+=== elementwise: y = exp(x)·0.5 + r: lowerable
+    fifo   SPLU -> VU           `xl`, once per iteration of `l`
+    fifo   SPLU -> VU           `rl`, once per iteration of `l`
+    fifo   VU -> SPSU           `yl`, once per iteration of `l`
+    chan   sp_x.ready   NCLU -> SPLU  per iteration of `l`: put after nclu.load, get before splu.load
+    chan   sp_r.ready   NCLU -> SPLU  per iteration of `l`: put after nclu.load, get before splu.load
+    chan   sp_y.ready   SPSU -> NCSU  per iteration of `l`: put after spsu.store, get before ncsu.store
+
+=== elementwise, one SP band per tensor: lowerable
+    fifo   SPLU -> VU           `xl`, once per iteration of `l`
+    fifo   VU -> SPSU           `yl`, once per iteration of `l`
+    chan   sp_x.ready   NCLU -> SPLU  per iteration of `l`: put after nclu.load, get before splu.load
+    chan   sp_x.free    SPLU -> NCLU  per iteration of `l`: put after splu.load, get before nclu.load; rewritten across ['c']
+    chan   sp_y.ready   SPSU -> NCSU  per iteration of `l`: put after spsu.store, get before ncsu.store
+    chan   sp_y.free    NCSU -> SPSU  per iteration of `l`: put after ncsu.store, get before spsu.store; rewritten across ['c']
+
+=== matmul + epilogue (the running example): lowerable
+    fifo   SPLU -> XVU -> MXU   `wt`, once per iteration of `i`
+    fifo   SPLU -> XVU -> MXU   `xt`, once per iteration of `i`
+    fifo   MXU -> VU            `p`, once per iteration of `i`
+    fifo   SPLU -> VU           `bl`, once per iteration of `o`
+    fifo   VU -> SPSU           `yr`, once per iteration of `o`
+    chan   sp_w.ready   NCLU -> SPLU  per iteration of `i`: put after nclu.load, get before splu.load
+    chan   sp_w.free    SPLU -> NCLU  per iteration of `i`: put after splu.load, get before nclu.load; rewritten across ['g', 'i']
+    chan   sp_x.ready   NCLU -> SPLU  per iteration of `i`: put after nclu.load, get before splu.load
+    chan   sp_x.free    SPLU -> NCLU  per iteration of `i`: put after splu.load, get before nclu.load; rewritten across ['nb']
+    chan   sp_b.ready   NCLU -> SPLU  per iteration of `o`: put after nclu.load, get before splu.load
+    chan   sp_b.free    SPLU -> NCLU  per iteration of `o`: put after splu.load, get before nclu.load; rewritten across ['g', 'o']
+    chan   sp_y.ready   SPSU -> NCSU  per iteration of `o`: put after spsu.store, get before ncsu.store
+    regs   VU carries ['acc'] across iterations
+
+=== rmsnorm: two passes over SP: lowerable
+    fifo   SPLU -> VU           `xl`, once per iteration of `r`
+    fifo   SPLU -> VU           `xl2`, once per iteration of `r3`
+    fifo   SPLU -> VU           `gl`, once per iteration of `r3`
+    fifo   VU -> SPSU           `yl`, once per iteration of `r3`
+    chan   sp_x.ready   NCLU -> SPLU  per iteration of `r`: put after nclu.load, get before splu.load
+    chan   sp_x.ready   NCLU -> SPLU  per iteration of `g`: put after loop `kb`, get before loop `kb2`
+    chan   sp_g.ready   NCLU -> SPLU  per iteration of `r3`: put after nclu.load, get before splu.load
+    chan   sp_g.free    SPLU -> NCLU  per iteration of `r3`: put after splu.load, get before nclu.load; rewritten across ['g', 'r3']
+    chan   sp_y.ready   SPSU -> NCSU  per iteration of `r3`: put after spsu.store, get before ncsu.store
+    regs   VU carries ['inv', 'ss'] across iterations
+
+=== matmul with SP partial sums: NOT LOWERABLE
+    error  F1 SP `sp_p`: splu.load reads before the spsu.store of the same iteration (a value carried through memory)
+    note   SP `sp_x` is only read: written by an earlier pipeline
+    note   SP `sp_w` is only read: written by an earlier pipeline
+
+=== rmsnorm -> matmul in one pipeline: NOT LOWERABLE
+    error  P5 cycle VU -> SPSU -> SPLU -> VU: cut the pipeline
+    note   SP `sp_x` is only read: written by an earlier pipeline
+    note   SP `sp_w` is only read: written by an earlier pipeline
+
+=== transpose through SP: NOT LOWERABLE
+    error  P5 cycle SPLU -> XVU -> SPSU -> SPLU: cut the pipeline
+    note   SP `sp_x` is only read: written by an earlier pipeline
+    note   SP `sp_o` is only written: read by a later pipeline
+

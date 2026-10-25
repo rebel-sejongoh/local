@@ -99,3 +99,29 @@ def fabric(fp):
         f"  edges[{len(fp.edges)}]: " + "; ".join(f"{e.flavor} {e.src}->{e.dst} {e.tensor}" for e in fp.edges[:4])] +
         [f"  channel {c.id} {c.flavor} {c.src}->{c.dst} peers={c.peers} roles={c.roles} gran={c.granularity!r} fires={c.fires}" for c in fp.channels[:10]] +
         ([f"  ... (+{len(fp.channels)-10} channels)"] if len(fp.channels) > 10 else []))
+
+
+def script(sc, max_lines=40):
+    """A process's `script.Script`: its repetitions, syncs and statements, indented; or why it has none."""
+    from mcc.grounding.script import Repetition, Script, Sync
+    if not isinstance(sc, Script):
+        return f"  (no Script: {sc})"
+    out = [f"Script {sc.process} dnc={sc.dnc} counts={dict(sc.counts) or {}} ahead={sc.ahead} behind={sc.behind}"]
+    def walk(items, d):
+        for x in items:
+            if len(out) > max_lines:
+                return
+            pad = "  " * d
+            if isinstance(x, Repetition):
+                cnt = f" count={x.count}" if x.count else ""
+                out.append(f"{pad}Rep {x.index} x{x.trips} unit={x.unit}{cnt}")
+                walk(x.body, d + 1)
+            elif isinstance(x, Sync):
+                dn = f" dncs={x.dncs}" if x.dncs else ""
+                out.append(f"{pad}Sync {x.kind.value} {','.join(x.peers)}{dn}")
+            else:
+                out.append(f"{pad}{stmt(x.stmt)}")
+    walk(sc.body, 1)
+    if len(out) > max_lines:
+        out.append("  ...")
+    return "\n".join(out)

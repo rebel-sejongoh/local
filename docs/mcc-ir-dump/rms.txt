@@ -1,7 +1,7 @@
-images [2944]
+images [3072]
 
 ######## kpl decl.Level body
-(Eltwise(args=(0, 0), op='mul', imm=None), Reduce(args=(2,), axis='K', combine='add'), Eltwise(args=(3,), op='mul', imm=0.00048828125), Eltwise(args=(4,), op='rsqrt', imm=None), Eltwise(args=(0, 5), op='mul', imm=None), Eltwise(args=(6, 1), op='mul', imm=None))
+(Eltwise(args=(0, 0), op='mul', imm=None), Reduce(args=(2,), axis='K', combine='add'), Eltwise(args=(3,), op='mul', imm=0.00048828125), Eltwise(args=(4,), op='add', imm=1e-05), Eltwise(args=(5,), op='rsqrt', imm=None), Eltwise(args=(0, 6), op='mul', imm=None), Eltwise(args=(7, 1), op='mul', imm=None))
 
 ######## kpl_ir.Graph
  inputs: (InputNode(name='input', axes=('R', 'K')), InputNode(name='scale', axes=('K',)))
@@ -9,9 +9,11 @@ images [2944]
    ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add')
    ConstNode(name='v2c', value=0.00048828125)
    EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125)))
-   EltwiseOperNode(name='v3', op='rsqrt', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))),))
-   EltwiseOperNode(name='v4', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), EltwiseOperNode(name='v3', op='rsqrt', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))),))))
-   EltwiseOperNode(name='v5', op='mul', deps=(EltwiseOperNode(name='v4', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), EltwiseOperNode(name='v3', op='rsqrt', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))),)))), InputNode(name='scale', axes=('K',))))
+   ConstNode(name='v3c', value=1e-05)
+   EltwiseOperNode(name='v3', op='add', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))), ConstNode(name='v3c', value=1e-05)))
+   EltwiseOperNode(name='v4', op='rsqrt', deps=(EltwiseOperNode(name='v3', op='add', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))), ConstNode(name='v3c', value=1e-05))),))
+   EltwiseOperNode(name='v5', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), EltwiseOperNode(name='v4', op='rsqrt', deps=(EltwiseOperNode(name='v3', op='add', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))), ConstNode(name='v3c', value=1e-05))),))))
+   EltwiseOperNode(name='v6', op='mul', deps=(EltwiseOperNode(name='v5', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), EltwiseOperNode(name='v4', op='rsqrt', deps=(EltwiseOperNode(name='v3', op='add', deps=(EltwiseOperNode(name='v2', op='mul', deps=(ReduceOperNode(name='v1', dep=EltwiseOperNode(name='v0', op='mul', deps=(InputNode(name='input', axes=('R', 'K')), InputNode(name='input', axes=('R', 'K')))), axis='K', combine='add'), ConstNode(name='v2c', value=0.00048828125))), ConstNode(name='v3c', value=1e-05))),)))), InputNode(name='scale', axes=('K',))))
 
 ######## TracedOp.nodes (Expr DAG)
    input:in[R,K]
@@ -19,10 +21,11 @@ images [2944]
    mul1=mul(input,input)
    red2=reduce.add[K](mul1)
    mul3=mul(red2,0.00048828125)
-   rsqrt4=rsqrt(mul3)
-   mul5=mul(input,rsqrt4)
-   mul6=mul(mul5,scale)
-  axes= {'lane': ('K', 'k'), 'shard': ('R', 'r'), 'reduce': (('K', 'k', 'lane'),)}  cross_dnc= None  unit_data= {'VU': {'dtype': 'dlf16'}}
+   add4=add(mul3,1e-05)
+   rsqrt5=rsqrt(add4)
+   mul6=mul(input,rsqrt5)
+   mul7=mul(mul6,scale)
+  axes= {'lane': ('K', 'k'), 'shard': ('R', 'r'), 'reduce': (('K', 'k', 'lane'),)}  cross_dnc= None  unit_data= <gone>
 
 ######## format_tiled
 tiled.trace  streamaddrs  K=2048 R=1        kind=streaming  units=NCLU,NCSU,VU
@@ -33,9 +36,10 @@ tiled.trace  streamaddrs  K=2048 R=1        kind=streaming  units=NCLU,NCSU,VU
         mul1 = mul(input, input)                      
         red2 = reduce.add(mul1)                       
         mul3 = mul(red2)                              
-        rsqrt4 = rsqrt(mul3)                          
-        mul5 = mul(input, rsqrt4)                     
-        mul6 = mul(mul5, scale)                         → out
+        add4 = add(mul3)                              
+        rsqrt5 = rsqrt(add4)                          
+        mul6 = mul(input, rsqrt5)                     
+        mul7 = mul(mul6, scale)                         → out
         card  None
         roles lane=K  shard=R
 
@@ -58,15 +62,15 @@ Mdmap(levels=(Level(axis='M', count=1, kind='shard'),), m_split=Split(extent=1, 
 
 ######## StreamPlan / StreamBlock
 chunks=StreamChunks(size=32, n_full=1, tail=0, compute_passes=1) unroll=1 walks=False tail=0 fold_walk=1
-block: passes= [['mul1=mul(input,input)', 'red2=reduce.add[K](mul1)', 'mul3=mul(red2,0.00048828125)', 'rsqrt4=rsqrt(mul3)'], ['mul5=mul(input,rsqrt4)', 'mul6=mul(mul5,scale)']]
-  {'streamed': ('input', 'scale'), 'scalars': (), 'shared': ('scale',), 'broadcast': (('rsqrt4', 0),), 'staged': frozenset(), 'collapsed': (), 'K': 32, 'fold': 1, 'ncores': 1, 'stream_passes': 1, 'stream_iters': 1, 'outputs': (('mul6', True),), 'units': ('VU', 'VU'), 'handoffs': (('rsqrt4', 0, False),), 'route': Route(loader='SPLU', storer='SPSU')}
+block: passes= [['mul1=mul(input,input)', 'red2=reduce.add[K](mul1)', 'mul3=mul(red2,0.00048828125)', 'add4=add(mul3,1e-05)', 'rsqrt5=rsqrt(add4)'], ['mul6=mul(input,rsqrt5)', 'mul7=mul(mul6,scale)']]
+  {'streamed': ('input', 'scale'), 'scalars': (), 'shared': ('scale',), 'broadcast': (('rsqrt5', 0),), 'staged': frozenset(), 'collapsed': (), 'K': 32, 'fold': 1, 'ncores': 1, 'stream_passes': 1, 'stream_iters': 1, 'outputs': (('mul7', True),), 'units': ('VU', 'VU'), 'handoffs': (('rsqrt5', 0, False),), 'route': Route(loader='SPLU', storer='SPSU')}
 
 ######## Mapped op=softmax seqs=1 nets=1
 
 ######## Mseq[0] (addressed)
-Mseq dnc=0 op=softmax tensors=('input', 'scale', 'mul6')
-  ranks={'input': 'streamed', 'scale': 'streamed', 'rsqrt4': 'broadcast', 'mul6': 'streamed'} grid=() problems={'input': 32, 'mul6': 32}
-  Loop[mpass] x1 lines={'input': 32, 'scale': 0, 'mul6': 32} tokens={'input': 1, 'scale': 1, 'rsqrt4': 1, 'mul6': 1} lo=1
+Mseq dnc=0 op=softmax tensors=('input', 'scale', 'mul7')
+  ranks={'input': 'streamed', 'scale': 'streamed', 'rsqrt5': 'broadcast', 'mul7': 'streamed'} grid=() problems={'input': 32, 'mul7': 32}
+  Loop[mpass] x1 lines={'input': 32, 'scale': 0, 'mul7': 32} tokens={'input': 1, 'scale': 1, 'rsqrt5': 1, 'mul7': 1} lo=1
     Pass lo=0 n=32
       Chunk lo=0 n=0
         Dma load  input shm[1:+32] -> nc0.sp[1:+32]
@@ -75,24 +79,24 @@ Mseq dnc=0 op=softmax tensors=('input', 'scale', 'mul6')
         Loop[run] x32 slots={'input': 1, 'scale': 1} tokens={'input': (0, 1), 'scale': (0, 1)}
           Stage SPLU0 input sp[1] -> VU toks=input[0, 0]
           Stage SPLU0 scale sp[34] -> VU toks=scale[0, 0]
-          Compute VU0 op=max_acc pop=input[0, 0],scale[0, 0] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-        Compute VU0 op=max_out pop= push=rsqrt4[0] -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-        Write SPSU0 rsqrt4 sp[67] <- VU toks=rsqrt4[0]
+          Compute VU0 op=max_acc pop=input[0, 0],scale[0, 0] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+        Compute VU0 op=max_out pop= push=rsqrt5[0] -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+        Write SPSU0 rsqrt5 sp[67] <- VU toks=rsqrt5[0]
       Chunk lo=0 n=0
-        Stage SPLU0 rsqrt4 sp[67] -> VU toks=rsqrt4[0] splat
-        Compute VU0 op=hold_sum pop=rsqrt4[0] push= -> None arith=(mul5=mul(input,rsqrt4); mul6=mul(mul5,scale))
-        Loop[run] x32 slots={'input': 1, 'scale': 1, 'mul6': 1} tokens={'input': (0, 1), 'scale': (0, 1), 'mul6': (0, 1)}
+        Stage SPLU0 rsqrt5 sp[67] -> VU toks=rsqrt5[0] splat
+        Compute VU0 op=hold_sum pop=rsqrt5[0] push= -> None arith=(mul6=mul(input,rsqrt5); mul7=mul(mul6,scale))
+        Loop[run] x32 slots={'input': 1, 'scale': 1, 'mul7': 1} tokens={'input': (0, 1), 'scale': (0, 1), 'mul7': (0, 1)}
           Stage SPLU0 input sp[1] -> VU toks=input[0, 0]
           Stage SPLU0 scale sp[34] -> VU toks=scale[0, 0]
-          Compute VU0 op=normalize pop=input[0, 0],scale[0, 0] push=mul6[0, 0] -> SPSU arith=(mul5=mul(input,rsqrt4); mul6=mul(mul5,scale))
-          Write SPSU0 mul6 sp[69] <- VU toks=mul6[0, 0]
+          Compute VU0 op=normalize pop=input[0, 0],scale[0, 0] push=mul7[0, 0] -> SPSU arith=(mul6=mul(input,rsqrt5); mul7=mul(mul6,scale))
+          Write SPSU0 mul7 sp[69] <- VU toks=mul7[0, 0]
       Chunk lo=0 n=0
-        Dma store mul6 shm[67:+32] <- nc0.sp[69:+32]
+        Dma store mul7 shm[67:+32] <- nc0.sp[69:+32]
   Fence dncs=0..0
 
 ######## passes(seqs)
-  VU (mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-  VU (mul5=mul(input,rsqrt4); mul6=mul(mul5,scale))
+  VU (mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+  VU (mul6=mul(input,rsqrt5); mul7=mul(mul6,scale))
 
 ######## Mpn[0]
 Mpn dnc=0: 5 processes, 5 channels
@@ -112,31 +116,31 @@ Mpn dnc=0: 5 processes, 5 channels
     (0, 1)       Stage SPLU0 input sp[3] -> VU toks=input[0, 3]
     ... (+123)
   process VU0: 66 stmts
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 0],scale[0, 0] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 1],scale[0, 1] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 2],scale[0, 2] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 3],scale[0, 3] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 4],scale[0, 4] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 5],scale[0, 5] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 6],scale[0, 6] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
-    (0, 1)       Compute VU0 op=max_acc pop=input[0, 7],scale[0, 7] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); rsqrt4=rsqrt(mul3))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 0],scale[0, 0] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 1],scale[0, 1] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 2],scale[0, 2] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 3],scale[0, 3] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 4],scale[0, 4] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 5],scale[0, 5] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 6],scale[0, 6] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+    (0, 1)       Compute VU0 op=max_acc pop=input[0, 7],scale[0, 7] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
     ... (+58)
   process SPSU0: 35 stmts
-    (0, 1)       Write SPSU0 rsqrt4 sp[0] <- VU toks=rsqrt4[0]
+    (0, 1)       Write SPSU0 rsqrt5 sp[0] <- VU toks=rsqrt5[0]
     (0, 1)       Put -> SPLU0 tok=1
-    (0, 2)       Write SPSU0 mul6 sp[0] <- VU toks=mul6[0, 0]
-    (0, 2)       Write SPSU0 mul6 sp[1] <- VU toks=mul6[0, 1]
-    (0, 2)       Write SPSU0 mul6 sp[2] <- VU toks=mul6[0, 2]
-    (0, 2)       Write SPSU0 mul6 sp[3] <- VU toks=mul6[0, 3]
-    (0, 2)       Write SPSU0 mul6 sp[4] <- VU toks=mul6[0, 4]
-    (0, 2)       Write SPSU0 mul6 sp[5] <- VU toks=mul6[0, 5]
+    (0, 2)       Write SPSU0 mul7 sp[0] <- VU toks=mul7[0, 0]
+    (0, 2)       Write SPSU0 mul7 sp[1] <- VU toks=mul7[0, 1]
+    (0, 2)       Write SPSU0 mul7 sp[2] <- VU toks=mul7[0, 2]
+    (0, 2)       Write SPSU0 mul7 sp[3] <- VU toks=mul7[0, 3]
+    (0, 2)       Write SPSU0 mul7 sp[4] <- VU toks=mul7[0, 4]
+    (0, 2)       Write SPSU0 mul7 sp[5] <- VU toks=mul7[0, 5]
     ... (+27)
   process NCSU: 3 stmts
     (0, 3)       Get <- SPSU0 tok=2
-    (0, 3)       Dma store mul6 shm[0:+32] <- nc0.sp[0:+32]
+    (0, 3)       Dma store mul7 shm[0:+32] <- nc0.sp[0:+32]
     (None, None) Fence dncs=0..0
   channel SPLU0->VU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=129 first=[('input', 0, 0), ('scale', 0, 0), ('input', 0, 1)]
-  channel VU0->SPSU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=33 first=[('rsqrt4', 0), ('mul6', 0, 0), ('mul6', 0, 1)]
+  channel VU0->SPSU0 FIFO/backpressure cap=None depth=None in_flight=0 tokens=33 first=[('rsqrt5', 0), ('mul7', 0, 0), ('mul7', 0, 1)]
   channel NCLU->SPLU0 SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[0]
   channel SPSU0->NCSU SP/put/get cap=1 depth=16 in_flight=1 tokens=1 first=[2]
   channel SPSU0->SPLU0 SP/put/get cap=1 depth=4 in_flight=1 tokens=1 first=[1]
@@ -148,7 +152,7 @@ Mpn dnc=0: 5 processes, 5 channels
   (0, 'SPSU', 0) [('write', 1, 'VU'), ('put', ('splu0',)), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU'), ('write', 1, 'VU')] ...
   (0, 'NCSU', None) [('get', ('spsu0',)), ('store', 32, 0), ('fence',)] 
 
-######## FabricProgram (after fold_templates)
+######## FabricProgram (after with_edges)
 FabricProgram units=5 schedule_driven=True sp_fan=1 reduces=False reduce_monoid=add mesync=NoneType broadcast=set() cout_spatial=False
   units: SPSU0@0, SPLU0@0, VU0@0, NCSU@0, NCLU@0 ...
   edges[0]: 
@@ -187,21 +191,21 @@ UnitProgram VU dnc=0 ncore=0 col=4 bd={'dnc': 0, 'ncore': 0}
   boundary[0]: 
   env={}
   lrf_raw[0] lccr_raw[0] framing={'unit_id': 130, 'spr': 16716287, 'lrf_idx': [], 'footprint': None} fold=None loop=None
-  template (42 top-level nodes):
+  template (44 top-level nodes):
     Tmpl IMMCOPY {typ1_imm=15872, replica=1, lrf_tgt=16, mode=0, slice_en=255, be=0}
     Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=17, mode=0, slice_en=255, be=0}
     Tmpl IMMCOPY {typ1_imm=15360, replica=1, lrf_tgt=18, mode=0, slice_en=255, be=0}
     Tmpl IMMCOPY {typ1_imm=16128, replica=1, lrf_tgt=19, mode=0, slice_en=255, be=0}
     Tmpl IMMCOPY {typ1_imm=15488, replica=1, lrf_tgt=20, mode=0, slice_en=255, be=0}
-    Tmpl IMMCOPY {typ1_imm=10240, replica=1, lrf_tgt=21, mode=0, slice_en=255, be=0}
-    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=22, mode=0, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=7327, replica=1, lrf_tgt=21, mode=0, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=10240, replica=1, lrf_tgt=22, mode=0, slice_en=255, be=0}
+    Tmpl IMMCOPY {typ1_imm=0, replica=1, lrf_tgt=25, mode=0, slice_en=255, be=0}
     Tmpl MVLOOPCNT {typ1_imm=32}
+    Tmpl FMA {src0=4, src1=16, src2=17, lrf_tgt=23, out_sp=0, slice_en=255, be=0}
     Tmpl FMA {src0=4, src1=16, src2=17, lrf_tgt=24, out_sp=0, slice_en=255, be=0}
-    Tmpl FMA {src0=4, src1=16, src2=17, lrf_tgt=25, out_sp=0, slice_en=255, be=0}
-    Tmpl FMA {src0=24, src1=24, src2=17, lrf_tgt=26, out_sp=0, slice_en=255, be=0}
-    Tmpl FMA {src0=26, src1=16, src2=22, lrf_tgt=22, out_sp=0, slice_en=255, be=1}
-    Tmpl FMA {src0=8, src1=16, src2=22, lrf_tgt=22, out_sp=0, slice_en=255, be=0}
-    Tmpl FMA {src0=22, src1=16, src2=8, lrf_tgt=22, out_sp=0, slice_en=255, be=0}
+    Tmpl FMA {src0=23, src1=23, src2=17, lrf_tgt=26, out_sp=0, slice_en=255, be=0}
+    Tmpl FMA {src0=26, src1=16, src2=25, lrf_tgt=25, out_sp=0, slice_en=255, be=1}
+    Tmpl FMA {src0=8, src1=16, src2=25, lrf_tgt=25, out_sp=0, slice_en=255, be=0}
 UnitProgram NCSU dnc=0 ncore=None col=6 bd={'dnc': 0, 'ncore': None}
   boundary[0]: 
   env={}
@@ -219,3 +223,42 @@ UnitProgram NCLU dnc=0 ncore=None col=7 bd={'dnc': 0, 'ncore': None}
     Tmpl LDMU {src0=1, src1=1, src2=1, src3=1, burst=0}
     Tmpl SYNC_ROLE {ref=stage}
     Tmpl RETURN {be=0}
+
+######## Scripts dnc 0 (per mpn process)
+process NCLU:
+Script NCLU dnc=0 counts={} ahead=0 behind=0
+  Dma load  input shm[0:+32] -> nc0.sp[0:+32]
+  Dma load  scale shm[0:+32] -> nc0.sp[0:+32]
+  Sync put splu0
+  Fence dncs=0..0
+process SPLU0:
+Script SPLU0 dnc=0 counts={} ahead=0 behind=0
+  Sync get nclu
+  Rep i0 x32 unit=run
+    Stage SPLU0 input sp[i0] -> VU toks=input[0, i0]
+    Stage SPLU0 scale sp[i0] -> VU toks=scale[0, i0]
+  Sync get spsu0
+  Stage SPLU0 rsqrt5 sp[0] -> VU toks=rsqrt5[0] splat
+  Rep i1 x32 unit=run
+    Stage SPLU0 input sp[i1] -> VU toks=input[0, i1]
+    Stage SPLU0 scale sp[i1] -> VU toks=scale[0, i1]
+process VU0:
+Script VU0 dnc=0 counts={} ahead=0 behind=0
+  Rep i0 x32 unit=run
+    Compute VU0 op=max_acc pop=input[0, i0],scale[0, i0] push= -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+  Compute VU0 op=max_out pop= push=rsqrt5[0] -> SPSU arith=(mul1=mul(input,input); red2=reduce.add[K](mul1); mul3=mul(red2,0.00048828125); add4=add(mul3,1e-05); rsqrt5=rsqrt(add4))
+  Compute VU0 op=hold_sum pop=rsqrt5[0] push= -> None arith=(mul6=mul(input,rsqrt5); mul7=mul(mul6,scale))
+  Rep i1 x32 unit=run
+    Compute VU0 op=normalize pop=input[0, i1],scale[0, i1] push=mul7[0, i1] -> SPSU arith=(mul6=mul(input,rsqrt5); mul7=mul(mul6,scale))
+process SPSU0:
+Script SPSU0 dnc=0 counts={} ahead=0 behind=0
+  Write SPSU0 rsqrt5 sp[0] <- VU toks=rsqrt5[0]
+  Sync put splu0
+  Rep i1 x32 unit=run
+    Write SPSU0 mul7 sp[i1] <- VU toks=mul7[0, i1]
+  Sync put ncsu
+process NCSU:
+Script NCSU dnc=0 counts={} ahead=0 behind=0
+  Sync get spsu0
+  Dma store mul7 shm[0:+32] <- nc0.sp[0:+32]
+  Fence dncs=0..0

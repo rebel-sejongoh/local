@@ -1,0 +1,5 @@
+{'m_tiles': 1, 'bin': 1, 'lane_blocks': 1, 'reduce_size': 1, 'double_buffer': False}
+as built: 76 channels, violations []
+body[0] chunk 0+1: 76 channels, violations [], syncs changed (before, after) {'NCLU': (3, 2), 'SPLU0': (2, 1), 'SPLU1': (2, 1)}
+body[0] chunk 1+2: 76 channels, violations [], syncs changed (before, after) {}
+body[0] chunk 2+3: 76 channels, violations [], syncs changed (before, after) {}

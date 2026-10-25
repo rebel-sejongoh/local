@@ -1,0 +1,41 @@
+# Expr DAG
+   x:in[R,C]
+   r:in[R,C]
+   exp1=exp(x)
+   mul2=mul(exp1,0.5)
+   add3=add(mul2,r)
+  axes = {'lane': ('C', 'c'), 'shard': ('R', 'r'), 'reduce': (('C', 'c', 'lane'),)}
+
+# format_tiled
+tiled.trace  streamaddrs  C=64 R=2048        kind=streaming  units=NCLU,NCSU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        x:[R,C]                                       
+        r:[R,C]                                       
+        exp1 = exp(x)                                 
+        mul2 = mul(exp1)                              
+        add3 = add(mul2, r)                             → out
+        card  None
+        roles lane=C  shard=R
+
+  spatial
+        dnc[16] = shard.R[16] × split.C[1]
+
+  temporal
+    loop mtile.R[128]
+      LEAF  R=1:line
+              reduce C.blk[1] × C.in[64]   (leaf_K=64)
+
+  accumulate
+        acc_edge None   monoid=add   cadence={'accum': 1, 'npass': 1}   temporal_depth=1
+
+  covers
+        C     lane-reduceleaf 64  (lanes × beats)                    ✓  leaf 64 vs extent 64
+        R     shard  leaf 1 × shard_extent 2048                  ✓  shard_extent 2048 vs extent 2048
+
+# Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=2048, count=16, tie_break='first'))
+
+# StreamPlan / StreamBlock
+chunks=StreamChunks(size=1, n_full=1, tail=0, compute_passes=1) unroll=1 walks=False tail=0
+passes = [['exp1=exp(x)', 'mul2=mul(exp1,0.5)', 'add3=add(mul2,r)']]

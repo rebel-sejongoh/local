@@ -1,0 +1,48 @@
+# kpl body: (Reduce(args=(0,), axis='K', combine='max'), Eltwise(args=(0, 1), op='sub', imm=None), Eltwise(args=(2,), op='exp', imm=None), Reduce(args=(3,), axis='K', combine='add'), Eltwise(args=(4,), op='recip', imm=None), Eltwise(args=(3, 5), op='mul', imm=None))
+# Expr DAG (kpl_translate.dag_of, before tiling)
+   input:in[R,K]
+   red1=reduce.max[K](input)
+   sub2=sub(input,red1)
+   exp3=exp(sub2)
+   red4=reduce.add[K](exp3)
+   recip5=recip(red4)
+   mul6=mul(exp3,recip5)
+
+# traced op: axes = {'lane': ('K', 'k'), 'shard': ('R', 'r'), 'reduce': (('K', 'k', 'lane'),)}
+
+# format_tiled
+tiled.trace  streamaddrs  K=512 R=1024        kind=streaming  units=NCLU,NCSU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        input:[R,K]                                   
+        red1 = reduce.max(input)                      
+        sub2 = sub(input, red1)                       
+        exp3 = exp(sub2)                              
+        red4 = reduce.add(exp3)                       
+        recip5 = recip(red4)                          
+        mul6 = mul(exp3, recip5)                        → out
+        card  None
+        roles lane=K  shard=R
+
+  spatial
+        dnc[16] = shard.R[16] × split.K[1]
+        ncore[2]  (within each dnc)
+
+  temporal
+    loop mtile.R[8]
+      LEAF  R=4:line
+              reduce K.blk[8] × K.in[64]   (leaf_K=512)
+
+  accumulate
+        acc_edge ('VU', 'VU', 'acc')   monoid=add   cadence={'accum': 1, 'npass': 3}   temporal_depth=1
+
+  covers
+        K     lane-reduceleaf 512  (lanes × beats)                   ✓  leaf 512 vs extent 512
+        R     shard  leaf 4 × shard_extent 1024                  ✓  shard_extent 1024 vs extent 1024
+
+# Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=1024, count=16, tie_break='first'))
+
+# StreamPlan / StreamBlock
+chunks=StreamChunks(size=8, n_full=1, tail=0, compute_passes=1) unroll=1 walks=False tail=0
+passes = [['red1=reduce.max[K](input)'], ['sub2=sub(input,red1)', 'exp3=exp(sub2)', 'red4=reduce.add[K](exp3)', 'recip5=recip(red4)'], ['mul6=mul(exp3,recip5)']]

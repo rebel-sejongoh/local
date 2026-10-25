@@ -1,24 +1,46 @@
 # MLIR machine IR for REBEL pipelines
 
 A machine IR in which every unit's program is SSA: its notation, the rules a pipeline must meet and how they are
-checked, and examples (sqrt, a matmul with macro ops, `down_proj` on 16 DNCs). It is a design sketch; none of the
-code has been run.
+checked, and examples. The matrix unit (TU, ABSU, ABLUs) appears as one unit, the MXU, with one op, until the
+image is emitted.
 
-Decisions applied
+| Section | Contents |
+|---|---|
+| [Pipelines](#pipelines) | the sequential and distributed forms, the rules, a sqrt example |
+| [The MXU](#the-mxu) | `mxu.matmul` |
+| [Example: matmul](#example-matmul) | `x[128, 512] @ w[512, 256]`: sequential form, distributed form, checks |
+| [Algorithms](#algorithms) | the checks and loop distribution |
+| [Before](#before-register-allocation) / [after register allocation](#after-register-allocation) | the sqrt example allocated |
+| [Emitting the MXU](#emitting-the-mxu) | the MXU's template and the example's TU, ABSU and ABLU programs |
+| [Appendix A](#appendix-a-down_proj-as-one-spmd-program) | `down_proj` on 16 DNCs, written out per unit |
+| [Appendix B](#appendix-b-macro-op-background-and-plan) | why a macro op, and the reduce collective |
+
+It is a design sketch: only the generated assembly in [`matmul-kouter-vp.md`](matmul-kouter-vp.md) has run.
+
+## Notation
+
 - Every unit is SSA. A value carried across a loop is a loop `iter` / `yield`; a value merged after a branch is a block argument.
 - An op that updates a register in place returns the new value: `%sn, %cn = nclu.ldmu …`. Register allocation ties the result to the operand.
 - Op syntax: `%results = <unit>.<opcode> sinks, src0, src1, … {attrs} : result types`, with sources in ISA field order.
   The left-hand side holds only registers, or nothing: a FIFO is never a result, and the FIFO an op pushes to is an
   operand on the right.
   A register result is a `%result`, and every op with results shows their types after `:`. A FIFO sink is written
-  first, as `field = selected value -> %fifo` (`sp_tgt = result -> %f_vs`; `consumer -> %f_ld` when the field has one
-  value). A target on a fixed link (TU `south_tgt`, `east_tgt`) is an attribute. A memory destination (`SP[…]`,
-  `AB[…]`, `SHM[…]`) is the first operand.
-- Memory operands print as `SPACE[base + offset : length]`. NC: `SP[%sbr + %sar : N]`, `SHM[%cbr + %car : N]`, in lines, `N` = burst. SP units: `SP[%ptr + %stride]`, in bytes, the address the access actually uses. A strided NC transfer (`LDSU`/`STSU`) prints `SP[%sar, stride %sbr : N]`. The `+` is fixed syntax for the hardware's own addition, not a general expression.
+  first: `field = selected value -> %fifo` when the field selects a value (`sp_tgt = result -> %f_vs`), and
+  `field = %fifo` when it only names the destination (`consumer = %f_ld`). A target on a fixed link (TU
+  `south_tgt`, `east_tgt`) is an attribute. A memory destination (`SP[…]`, `AB[…]`, `SHM[…]`) is the first
+  operand.
+- Memory operands print as `SPACE[base + offset : length]`. NC: `SP[%sbr + %sar : N]`, `SHM[%cbr + %car : N]`, in
+  lines, `N` = burst. SP and AB units: `SP[%ptr + %stride]`, `AB[%ptr + %stride]`, in bytes, the address the access
+  actually uses (the unit adds the stride before each access); a burst is the `burst_size` attribute. A strided
+  NC transfer (`LDSU`/`STSU`) prints `SP[%sar, stride %sbr : N]`. The `+` is fixed syntax for the hardware's own
+  addition, not a general expression.
 - `alloc` returns the buffer's start address. SHM elements are `i1024` (line); SP elements are `i8` (byte). NC addresses SP in lines, so it uses `%bi / 128`.
 - Register initial values (the block's `.lrf` preload): `addr_init` for the NC descriptor fields (SAR, SBR, CAR, CBR),
   `reg_init` for an ordinary LRF.
-- Types name the hardware storage: `!sar<i15>`, `!sbr<i16>`, `!car<i20>`, `!cbr<i20>` (NC descriptor fields), `!lrf<i32>` (SP unit LRF), `!jcr`. After allocation they carry the index: `!sar<i15, 0>`.
+- Types name the hardware storage: `!sar<i15>`, `!sbr<i16>`, `!car<i20>`, `!cbr<i20>` (NC descriptor fields),
+  `!lrf<i32>` (SP unit LRF), `!jcr`. After allocation they carry the index: `!sar<i15, 0>`.
+- The unit prefix of an op names the unit that runs it; `mxu.` names [the MXU](#the-mxu), which stands for the TU,
+  ABSU and ABLUs together.
 - Channels: the NC side lists SP units explicitly (`{splu0}`); NCore count is `ncores` on `pipeline`.
 - Branches use our own terminators (`splu.jcmp`, `fallthrough`) with block arguments; hardware loops stay `loop` regions.
 
@@ -36,22 +58,6 @@ buffers and ordering themselves with sync channels. It has two forms:
 Loop distribution derives the second from the first (see [Algorithms](#algorithms)). Writing the sequential form
 gives every FIFO and channel one order that both of its ends follow, which is what makes the checks below local.
 
-### Notation for TU rows and grouped registers
-
-| Form | Meaning | Resolved at emit |
-|---|---|---|
-| `unit @tu attributes {rows = 8, cols = 8}`, `%r = tu.row_id` | one program for every TU row (8 slices each) | 8 row blocks, `.place col = r` |
-| `loop (56 - 8 * %r)` | a trip count affine in the row index (or grid indices, Appendix A) | an immediate per copy; a trip of 0 drops the loop |
-| `select(%r == 0, #0, %north)` | an operand chosen by a static predicate | the operand field per copy |
-| `tu.north_link`, `tu.west_link` | the row's fixed input links; each use pops one entry | `FIFO_NORTH`, `FIFO_WEST` |
-| `tu.fma_r` / `tu.fma` | TU `FMA` with register results / with link outputs only (`south_tgt`, `east_tgt`) | one `FMA` |
-| `N x T` after `:` | N results of type T | |
-| `(%w0, %w1, %w2, %w3)` as a `dot_len = 4` operand | the 4 registers of one dot product | consecutive LRFs, `src0=LRF[0:3]` |
-| `(%p0, %p1, %p2, %p3)` under `unroll = 4` | the operand of unroll step `t` is `%p<t>` | consecutive LRFs, `unroll_control.src1=1` |
-| `%r0, …, %rN = op … {unroll = N}` | one result register per unroll step | consecutive LRFs, `unroll_control.lrf_tgt=1` |
-
-`CONST0` and `CONST4` are the VU/XVU constant registers (`.lccr`): 0 and 1.0.
-
 ### Constraints
 
 A pipeline in sequential form must satisfy the rules below. They exclude some schedules on purpose (an SP
@@ -68,9 +74,8 @@ body; [Algorithms](#algorithms) gives the checks.
 | P6 | **Capacity.** Along the program order, no FIFO holds more tokens than its depth and no channel more `put`s than its counter, counting as in [Capacity](#capacity) | stalls that become deadlocks with real FIFO depths |
 | P7 | **Resources.** Registers per unit (TU 12 LRFs per row, VU 16), the AB ring (1 KB per row), SP lines | allocation failure |
 
-A value that must cross loop levels or iterations (weights latched once and used by every tile, an accumulator over
-K) is a register of one unit: P1 allows it, and P2 does not see it. A macro op (below) is such a case: its weights
-are TU registers.
+A value that must cross loop levels or iterations (an accumulator over K) is a register of one unit: P1 allows
+it, and P2 does not see it. The MXU keeps its weights the same way, in TU registers, across the tiles of one op.
 
 ### Example: sqrt in sequential form
 
@@ -98,7 +103,7 @@ kernel @sqrt attributes {spmd_dncs = 16} {
         nclu.sync put %stage
         splu.sync get %stage
         %pl = loop 8 iter(%p = %pc) {                                                          // line
-          %pn = splu.ldu consumer -> %f_ld, SP[%p + %st] : !lrf<i32>
+          %pn = splu.ldu consumer = %f_ld, SP[%p + %st] : !lrf<i32>
           %v  = vu.fma %f_ld, CONST4, CONST0 : vector<64xdlf16>       // pops the line
           …                                         // rest of the sqrt sequence and the output side
           yield %pn
@@ -123,314 +128,331 @@ kernel @sqrt attributes {spmd_dncs = 16} {
 | P5 | edges NCLU → SPLU (`%stage`), SPLU → VU (`%f_ld`); `%infree` is a rewrite channel. Acyclic |
 | P6 | `%stage` and `%infree` hold at most 1 `put`; `%f_ld` at most 1 line |
 
-### Macro ops
+## The MXU
 
 In a weight-stationary matmul the TU, ABSU and ABLU programs barely change with the shape
-([Appendix B](#appendix-b-macro-op-background-and-plan)), so they are two macro ops in the push/pop style of TPU's MXU
-(`vmatpush` loads weights, `vmatmul` pushes LHS rows, `vpop` pops results). A macro op is written in the
-sequential form like any op and replaced by its template before the checks and loop distribution.
+([Appendix B](#appendix-b-macro-op-background-and-plan)). The IR therefore treats the three as one unit, the
+**MXU**, with one op, and keeps it that way through the checks, loop distribution and register allocation. Only
+the emitter turns it into the ABSU, ABLU and TU programs ([Emitting the MXU](#emitting-the-mxu)).
 
-| Macro op | Role | TPU MXU counterpart |
-|---|---|---|
-| `tu.load_weights` | latch a 64×64 weight tile into TU LRF0..7 of every row | `vmatpush` |
-| `tu.matmul` | stream `m_rows` activation lines through ABSU → AB → ABLU → TU; push `m_rows` result lines south | `vmatmul` |
-| the VU's `%f_tv` operand | pop result lines out of row 7 | `vpop` |
+```mlir
+// Latch one 64×64 weight tile from %f_n0, then run `tiles` tiles of `m_rows` rows of x from %f_ab through it,
+// pushing m_rows result lines per tile to %f_tv.
+mxu.matmul out = %f_tv, weights = %f_n0, acts = %f_ab {tiles = n, m_rows = 4, dtype = dlf16}
+    : (!fifo<tu -> vu, vector<64xdlf16>>, !fifo<xvu -> tu, vector<64xdlf16>>,
+       !fifo<xvu -> absu, vector<64xdlf16>>) -> ()
+```
 
-| Type | Meaning |
+| Operand, attribute | Meaning |
 |---|---|
-| `!fifo<src -> dst, vector<64xdlf16>>` | a hardware FIFO of 128 B lines, as above |
-| `!tu.wtile<64x64xdlf16>` | the weight tile held in TU LRF0..7 of all 8 rows (row r holds K rows `8r .. 8r+7`, slice c holds N columns `8c .. 8c+7`). It names the registers `%w0 .. %w7` of the expansion |
-| `!tu.mrows<N>` | `N ∈ {1, 2, 4}`: rows per `tu.matmul`. Bounded by the TU's 4 partial-sum registers LRF8..11 and the unroll degrees 0..2 |
+| `weights` | 64 lines: line `q` is `w[k0 + q, n0 .. n0+63]`, a 64×64 tile of one K block and one N block |
+| `acts` | `tiles · m_rows` lines: line `j` of tile `t` is `x[row, k0 .. k0+63]`, the same K block |
+| `out` | `tiles · m_rows` lines: `Σ_q x[row][k0 + q] · w[k0 + q][n0 ..]`, in DLFloat16 (DLFloat18 inside the array) |
+| `m_rows` | rows per tile: 1, 2 or 4, bounded by the TU's four partial-sum registers (LRF8..11). 4 in practice |
+| `tiles` | how many tiles reuse the latched weights: any count |
 
-```mlir
-// Latch one weight tile. Pops 64 lines from %f_n0; the tile is ready when all 64 have been taken.
-%wt = tu.load_weights weights = %f_n0 {dtype = dlf16}
-    : (!fifo<xvu -> tu, vector<64xdlf16>>) -> !tu.wtile<64x64xdlf16>
+One op replaces TPU's `vmatpush` (load the weights), `vmatmul` (push LHS rows) and `vpop` (pop results), and
+it replaces a separate weight load: the weights live only inside the op, so the IR carries no weight value
+across loops, and weight reuse is the `tiles` attribute.
 
-// One activation tile through the latched weights. Pops m_rows lines from %f_ab, pushes m_rows lines to %f_tv.
-tu.matmul out = %f_tv, %wt, acts = %f_ab {m_rows = 4, dtype = dlf16}
-    : (!fifo<tu -> vu, vector<64xdlf16>>, !tu.wtile<64x64xdlf16>, !fifo<xvu -> absu, vector<64xdlf16>>) -> ()
-```
+**As a unit.** The MXU's ops are `mxu.` ops. Its ports are two input FIFOs (`weights` from the XVU into TU row
+0's north, `acts` from the XVU into the ABSU) and one output FIFO (`out`, from TU row 7's south to the VU). Its
+registers (LRF0..11 of every TU row, the ABSU's and ABLUs' AB pointers) are fixed by its template and used by
+nothing else, so register allocation leaves them alone.
 
-`%f_ab` line `t` holds activation row `t` over the tile's 64 K values; `%f_tv` line `t` is `Σ_k x[t][k] · w[k][:]`
-over the 64 N columns, in DLFloat16 (DLFloat18 inside the array). The result is a FIFO operand on the right
-(`out = %f_tv`); the left-hand side holds only the register tile `%wt`.
+**Port contracts**, used by the capacity check:
 
-Port contracts, used by the capacity check:
-
-| Op, port | Count per op | Block before progress |
+| Port | Per op | Progress |
 |---|---|---|
-| `load_weights`, `weights` | pops 64 | 1: each line is latched or passed as it arrives. The tile is ready after all 64; no `matmul` result leaves before that |
-| `matmul`, `acts` | pops `m_rows` | `m_rows`: the ABSU stores the whole block, then signals the ABLUs |
-| `matmul`, `out` | pushes `m_rows` | after row 7 drains: once all `m_rows` activation lines and the weight tile are in |
+| `weights` | pops 64 | a line at a time, latched or passed down; the first result needs all 64 |
+| `acts` | pops `tiles · m_rows` | a tile at a time |
+| `out` | pushes `tiles · m_rows` | a tile at a time, in tile order, after that tile's `acts` |
 
-**Expansion.** Each macro becomes the ops below at its place in the sequential body, with registers fixed. The
-template's register preload and its link and channel declarations move to the pipeline entry; its pointer
-registers become loop-carried (`iter` / `yield`) through every loop around the site. Parameters: `M = m_rows`, the
-AB base `A` (0 in the example below), the row index `%r`.
+## Example: matmul
 
-```mlir
-// pipeline entry, once per pipeline
-%f_w   = fifo ablu -> tu.west : !fifo<ablu -> tu, vector<8xdlf16>>     // per row
-%abw   = channel absu -> ablu : !chan<absu -> ablu>                      // the block is in the AB
-%abf   = channel ablu -> absu : !chan<ablu -> absu>                      // the ABLUs are ready for the block
-%r     = tu.row_id : index
-%north = tu.north_link : !tu.link<vector<8xdlf16>>
-%west  = tu.west_link  : !tu.link<vector<8xdlf16>>
-%a0, %ast       = absu.reg_init A - 16, 16 : !lrf<i10>, !lrf<i10>                  // 10-bit ring
-%h0, %h1, %hst  = ablu.reg_init A - 16, A - 8, 16 : !lrf<i10>, !lrf<i10>, !lrf<i10>
+`y[128, 256] = x[128, 512] @ w[512, 256]` in DLFloat16, on one DNC and one NCore (`ncores = 1`).
 
-// %wt = tu.load_weights weights = %f_n0: every TU row (row 0's north is %f_n0)
-%w0, %w1, %w2, %w3, %w4, %w5, %w6, %w7 = tu.fma_r #0, %north, #1.0 {unroll = 8}
-    : 8 x !tu.lrf<vector<8xdlf16>>                                     // LRF0..7: w[8r + i, :]
-loop (56 - 8 * %r) {
-  tu.fma %north, #0, #1.0 {south_tgt = src0}                           // pass a w line to the rows below
-}
+**Tiling.** The MXU works on 64×64 weight tiles and on tiles of 4 rows of x:
 
-// tu.matmul out = %f_tv, %wt, acts = %f_ab {m_rows = M}; %a, %g0, %g1 are the carried AB pointers
-ablu.sync put %abf
-%an  = absu.stu AB[%a + %ast : M], %f_ab {burst_en = 1} : !lrf<i10>      // line t -> AB_r[16t + 2i] := line_t[8r + i]
-absu.sync put %abw
-absu.sync get %abf
-ablu.sync get %abw
-%g0n = ablu.ldu consumer -> %f_w, AB[%g0 + %hst : M] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
-%g1n = ablu.ldu consumer -> %f_w, AB[%g1 + %hst : M] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
-%p0, …, %p<M-1> = tu.fma_r (%w0, %w1, %w2, %w3), select(%r == 0, #0, %north), %west
-                            {east_tgt = src2, dot_len = 4, unroll = M}
-    : M x !tu.lrf<vector<8xdlf18>>                                     // LRF8 .. LRF8+M-1
-tu.fma (%w4, %w5, %w6, %w7), (%p0, …, %p<M-1>), %west
-       {east_tgt = src2, south_tgt = result, dot_len = 4, unroll = M}   // row 7's south is %f_tv
-```
+| Symbol | Meaning | Value |
+|---|---|---|
+| `M` | rows per tile, `m_rows` | 4 |
+| `T` | tiles: 128 rows / 4 | 32 |
+| `KB` | K blocks of 64: 512 / 64 | 8 |
+| `NB` | N blocks of 64, the output column blocks: 256 / 64 | 4 |
+| `R` | tiles whose partial sums stay in the VU at once (4 LRFs each, of 16) | 4 |
 
-The `stu` and `ldu` return their pointers advanced by `M · 16` bytes, so consecutive `matmul`s use consecutive
-blocks of the 1 KB ring. The `%abf` `put` comes first in each `matmul`, so the handshake meets P2 and P3 inside one
-iteration and needs no exception. The TU's row-to-row links are internal to the TU program; their counts are
-checked per row as in [Appendix A](#what-the-single-tu-program-lets-a-checker-prove).
+**Schedule.** Register psum ([`matmul-k-outer-schedule.md`](matmul-k-outer-schedule.md), variant C): for each
+output block and each group of `R` tiles, walk the K blocks; for each K block one `mxu.matmul` latches the
+weight tile and runs the group's 4 tiles through it, and the VU adds each tile's result into that tile's four
+registers. The loops, outer to inner:
 
-### Example: matmul with macro ops
+| Loop | Trip count | Why |
+|---|---|---|
+| `nb` | 4 | N blocks, `256 / 64` |
+| `g` | 8 | groups of `R` tiles, `T / R = 32 / 4` |
+| `kb` | 8 | K blocks, `512 / 64`: one `mxu.matmul {tiles = 4}`, one weight tile |
+| `i` | 4 | tiles in the group (SPLU, XVU, VU), `R` |
+| `q` | 64 | weight lines of a tile (SPLU, XVU) |
+| NCLU | 64, 128 | 16-line loads of x (1024 lines) and w (2048 lines) |
+| NCSU | 32, one per `(nb, g)` | 16-line stores of y |
 
-`y[32, 64] = x[32, 64] @ w[64, 64]` on one DNC and one NCore: the weights are latched once and 8 tiles of 4 rows
-stream through them. The VU `fma` is where an epilogue (bias, activation, quantization) goes; replacing the XVU
-`logical` on the activation path by an `fma` gives a prologue (a per-row scale).
+So the MXU runs 256 ops, each latching one weight tile and computing 4 tiles.
+
+**Layout.** One line is 128 bytes, 64 DLFloat16 values.
+
+| Tensor | SHM (lines) | SP (lines from the band's base) | Lines |
+|---|---|---|---|
+| x | `x[kb][m]` at `X + 128·kb + m`: row `m`, K values `64·kb .. +63` | same order at `X0` | 1024 |
+| w | `w[kb][nb][q]` at `W + 256·kb + 64·nb + q`: K row `64·kb + q`, N values `64·nb .. +63` | same order at `W0` | 2048 |
+| y | `y[nb][m]` at `Y + 128·nb + m` | same order at `Y0` | 512 |
+
+**Addresses.** Each unit counts in its own unit; the comments in the code use these:
+
+| Units | Address | Unit | Step |
+|---|---|---|---|
+| NCLU, NCSU | `SP[%sbr + %sar : N]`, `SHM[%cbr + %car : N]` | lines | the transfer advances `%sar` and `%car` by its `N` lines |
+| SPLU, SPSU | `SP[%ptr + %stride]` | bytes (a line is 128) | adds `%stride` before each line; `modlrfimm` adds an immediate in bytes |
+| XVU, MXU, VU | none: registers and FIFOs | | |
+
+### Sequential form
+
+The SPLU's pointers start one line before the first line they read (it adds the stride before reading); the
+comments give the lines each op reads and how much it moves.
 
 ```mlir
 kernel @mm {
-  %x  = alloc : !ptr<buffer<32 x i1024>, #shm>                 // x[t, :] at line t
-  %w  = alloc : !ptr<buffer<64 x i1024>, #shm>                 // w[q, :] at line q
-  %y  = alloc : !ptr<buffer<32 x i1024>, #shm>                 // y[t, :] at line t
-  %ws = alloc {align = 128} : !ptr<buffer<8192 x i8>, #sp>    // 64 w lines
-  %xs = alloc {align = 128} : !ptr<buffer<4096 x i8>, #sp>    // 32 x lines
-  %ys = alloc {align = 128} : !ptr<buffer<4096 x i8>, #sp>    // 32 y lines
+  %x  = alloc : !ptr<buffer<1024 x i1024>, #shm>              // X: x[kb][m]
+  %w  = alloc : !ptr<buffer<2048 x i1024>, #shm>              // W: w[kb][nb][q]
+  %y  = alloc : !ptr<buffer<512 x i1024>, #shm>               // Y: y[nb][m]
+  %xs = alloc {align = 128} : !ptr<buffer<131072 x i8>, #sp>  // X0: 1024 lines
+  %ws = alloc {align = 128} : !ptr<buffer<262144 x i8>, #sp>  // W0: 2048 lines
+  %ys = alloc {align = 128} : !ptr<buffer<65536 x i8>, #sp>   // Y0: 512 lines
 
-  pipeline @mm (%x, %w, %y) attributes {ncores = 1} {          // %x, %w read only; %y written only
+  pipeline @mm (%x, %w, %y) attributes {ncores = 1} {
     %f_sx  = fifo splu -> xvu      : !fifo<splu -> xvu, vector<64xdlf16>>
-    %f_n0  = fifo xvu -> tu.north  : !fifo<xvu -> tu, vector<64xdlf16>>    // row 0's north
-    %f_ab  = fifo xvu -> absu      : !fifo<xvu -> absu, vector<64xdlf16>>
-    %f_tv  = fifo tu.south -> vu   : !fifo<tu -> vu, vector<64xdlf16>>     // row 7's south
+    %f_n0  = fifo xvu -> tu.north  : !fifo<xvu -> tu, vector<64xdlf16>>    // MXU weights in
+    %f_ab  = fifo xvu -> absu      : !fifo<xvu -> absu, vector<64xdlf16>>  // MXU acts in
+    %f_tv  = fifo tu.south -> vu   : !fifo<tu -> vu, vector<64xdlf16>>     // MXU out
     %f_vs  = fifo vu -> spsu       : !fifo<vu -> spsu, vector<64xdlf16>>
-    %stage = channel nclu -> {splu0} : !chan<nclu -> splu0>
-    %done  = channel spsu -> ncsu    : !chan<spsu -> ncsu>
+    %stage = channel nclu -> {splu0} : !chan<nclu -> splu0>               // x, then w, is in SP
+    %done  = channel spsu -> ncsu    : !chan<spsu -> ncsu>                // a group's 16 y lines are in SP
 
-    %s0, %sb, %c0, %cb = nclu.addr_init sar = 0, sbr = %ws / 128, car = 0, cbr = %w
+    // ---- SHM -> SP: all of x and w (3584 of the SP's 32768 lines) ----
+    %s0, %sb, %c0, %cb = nclu.addr_init sar = 0, sbr = %xs / 128, car = 0, cbr = %x
         : !sar<i15>, !sbr<i16>, !car<i20>, !cbr<i20>
-    %t0, %tb, %u0, %ub = nclu.addr_init sar = 0, sbr = %xs / 128, car = 0, cbr = %x
-        : !sar<i15>, !sbr<i16>, !car<i20>, !cbr<i20>
-    %wp0, %lst = splu.reg_init %ws - 128, 128 : !lrf<i32>, !lrf<i32>
-    %xp0       = splu.reg_init %xs - 128 : !lrf<i32>
-    %o0, %ost  = spsu.reg_init %ys - 128, 128 : !lrf<i32>, !lrf<i32>
-    %d0, %db, %e0, %eb = ncsu.addr_init sar = 0, sbr = %ys / 128, car = 0, cbr = %y
-        : !sar<i15>, !sbr<i16>, !car<i20>, !cbr<i20>
-
-    // w: SHM -> SP -> XVU -> TU
-    %s2, %c2 = loop 2 iter(%s = %s0, %c = %c0) {
-      %sn, %cn = nclu.ldmu SP[%sb + %s : 32], SHM[%cb + %c : 32] : !sar<i15>, !car<i20>
+    %s1, %c1 = loop 64 iter(%s = %s0, %c = %c0) {
+      %sn, %cn = nclu.ldmu SP[%sb + %s : 16], SHM[%cb + %c : 16] : !sar<i15>, !car<i20>   // 16 lines, 2 KB
       yield %sn, %cn
     }
     nclu.sync put %stage
-    splu.sync get %stage
-    %wp2 = loop 64 iter(%wp = %wp0) {
-      %wpn = splu.ldu consumer -> %f_sx, SP[%wp + %lst] : !lrf<i32>             // w line q
-      xvu.logical tu_tgt = src0 -> %f_n0, %f_sx, CONST0 {immediate = 1}         // OR 0: pass it to the TU
-      yield %wpn
+    %t0, %tb, %u0, %ub = nclu.addr_init sar = 0, sbr = %ws / 128, car = 0, cbr = %w
+        : !sar<i15>, !sbr<i16>, !car<i20>, !cbr<i20>
+    %t1, %u1 = loop 128 iter(%t = %t0, %u = %u0) {
+      %tn, %un = nclu.ldmu SP[%tb + %t : 16], SHM[%ub + %u : 16] : !sar<i15>, !car<i20>   // 16 lines, 2 KB
+      yield %tn, %un
     }
-    %wt = tu.load_weights weights = %f_n0 {dtype = dlf16}
-        : (!fifo<xvu -> tu, vector<64xdlf16>>) -> !tu.wtile<64x64xdlf16>
-
-    // x: SHM -> SP, then 8 tiles through the latched weights
-    %t1, %u1 = nclu.ldmu SP[%tb + %t0 : 32], SHM[%ub + %u0 : 32] : !sar<i15>, !car<i20>
     nclu.sync put %stage
     splu.sync get %stage
-    %xp2, %o2 = loop 8 iter(%xp = %xp0, %o = %o0) {                            // tile
-      %xpn = splu.ldu consumer -> %f_sx, SP[%xp + %lst] {burst_size = 4} : !lrf<i32>
-      loop 4 {
-        xvu.logical ab_tgt = src0 -> %f_ab, %f_sx, CONST0 {immediate = 1}       // prologue: an fma here
+    splu.sync get %stage
+
+    %xp0, %wp0, %st = splu.reg_init %xs - 128, %ws - 128, 128 : !lrf<i32>, !lrf<i32>, !lrf<i32>
+    %o0, %ost       = spsu.reg_init %ys - 128, 128 : !lrf<i32>, !lrf<i32>
+    %d0, %db, %e0, %eb = ncsu.addr_init sar = 0, sbr = %ys / 128, car = 0, cbr = %y
+        : !sar<i15>, !sbr<i16>, !car<i20>, !cbr<i20>
+
+    %xE, %wE, %oE, %dE, %eE = loop 4 iter(%xn = %xp0, %wn = %wp0, %on = %o0, %dn = %d0, %en = %e0) {   // nb
+      %xG, %wG, %oG, %dG, %eG = loop 8 iter(%xg = %xn, %wg = %wn, %og = %on, %dg = %dn, %eg = %en) {  // g: tiles 4g .. 4g+3
+        %z0, …, %z15 = vu.immcopy 0 {unroll = 16} : 16 x !vu.lrf<vector<64xdlf16>>   // accumulators := 0
+        %xK, %wK, %acc0, …, %acc15 = loop 8 iter(%xk = %xg, %wk = %wg, %a0 = %z0, …, %a15 = %z15) {   // kb
+          // weight tile (kb, nb): SP lines W0 + 256·kb + 64·nb .. +63
+          %wk1 = loop 64 iter(%p = %wk) {                                         // q
+            %pn = splu.ldu consumer = %f_sx, SP[%p + %st] : !lrf<i32>             // 1 line, 128 B
+            xvu.logical tu_tgt = src0 -> %f_n0, %f_sx, CONST0 {immediate = 1}    // OR 0: pass it to the MXU
+            yield %pn
+          }
+          // the group's tiles: SP lines X0 + 128·kb + 16·g + 4·i .. +3
+          %xk1 = loop 4 iter(%q = %xk) {                                         // i
+            %qn = splu.ldu consumer = %f_sx, SP[%q + %st] {burst_size = 4} : !lrf<i32>   // 4 lines, 512 B
+            loop 4 {
+              xvu.logical ab_tgt = src0 -> %f_ab, %f_sx, CONST0 {immediate = 1}  // pass a line to the MXU
+            }
+            yield %qn
+          }
+          mxu.matmul out = %f_tv, weights = %f_n0, acts = %f_ab {tiles = 4, m_rows = 4, dtype = dlf16}
+              : (!fifo<tu -> vu, vector<64xdlf16>>, !fifo<xvu -> tu, vector<64xdlf16>>,
+                 !fifo<xvu -> absu, vector<64xdlf16>>) -> ()
+          loop 4 {                                                               // i: tile i's 4 lines
+            %a<i> = vu.fma %f_tv, CONST4, %a<i> {unroll = 4} : 4 x !vu.lrf<vector<64xdlf16>>  // LRF 4i .. 4i+3 += lines
+          }
+          %wk2 = splu.modlrfimm %wk1, 192 * 128 : !lrf<i32>       // next K block of this column block: +256 − 64 lines
+          %xk2 = splu.modlrfimm %xk1, 112 * 128 : !lrf<i32>       // next K block of these rows: +128 − 16 lines
+          yield %xk2, %wk2, %a0, …, %a15
+        }
+        %oK = loop 4 iter(%o = %og) {                                            // i: the group's 4 tiles out
+          vu.fma sp_tgt = result -> %f_vs, %acc<i>, CONST4, CONST0 {unroll = 4}   // 4 lines
+          %on2 = spsu.stu SP[%o + %ost], %f_vs {burst_size = 4} : !lrf<i32>      // Y0 + 128·nb + 16·g + 4·i, 512 B
+          yield %on2
+        }
+        spsu.sync put %done
+        ncsu.sync get %done
+        %dg2, %eg2 = ncsu.stmu SHM[%eb + %eg : 16], SP[%db + %dg : 16] : !sar<i15>, !car<i20>  // 16 lines to Y + 128·nb + 16·g
+        %wg2 = splu.modlrfimm %wK, -2048 * 128 : !lrf<i32>        // the same column block again: −8 · 256 lines
+        %xg2 = splu.modlrfimm %xK, -1008 * 128 : !lrf<i32>        // next group: −8 · 128 + 16 lines
+        yield %xg2, %wg2, %oK, %dg2, %eg2
       }
-      tu.matmul out = %f_tv, %wt, acts = %f_ab {m_rows = 4, dtype = dlf16}
-          : (!fifo<tu -> vu, vector<64xdlf16>>, !tu.wtile<64x64xdlf16>, !fifo<xvu -> absu, vector<64xdlf16>>) -> ()
-      vu.fma sp_tgt = result -> %f_vs, %f_tv, CONST4, CONST0 {unroll = 4}       // epilogue goes here
-      %on = spsu.stu SP[%o + %ost : 4], %f_vs : !lrf<i32>
-      yield %xpn, %on
+      %wn2 = splu.modlrfimm %wG, 64 * 128 : !lrf<i32>             // next column block: +64 lines
+      %xn2 = splu.modlrfimm %xG, -128 * 128 : !lrf<i32>           // back to tile 0: −8 · 16 lines
+      yield %xn2, %wn2, %oG, %dG, %eG
     }
-    spsu.sync put %done
-    ncsu.sync get %done
-    %d1, %e1 = ncsu.stmu SHM[%eb + %e0 : 32], SP[%db + %d0 : 32] : !sar<i15>, !car<i20>
   }
 }
 ```
 
-After expansion, `%wt` is `%w0 .. %w7` (TU registers defined outside the tile loop and used in every tile: allowed
-by P1), and the tile loop carries the AB pointers as well: `loop 8 iter(%xp = %xp0, %o = %o0, %a = %a0, %g0 = %h0,
-%g1 = %h1)`.
+`%a<i>` and `%acc<i>` name tile `i`'s four VU registers (LRF `4i .. 4i+3`); an op that redefines `%a<i>` in a
+loop over `i` stands for the four ops the loop unrolls into, since the VU has no register indirection
+([Algorithms](#algorithms), step 7).
 
-| Rule | Check |
-|---|---|
-| P2 | `%f_sx`: the `loop 64` pushes and pops 1 per iteration; the tile loop pushes 4 (`burst_size = 4`) and pops 4 (`loop 4`, one-sided). `%f_ab`, `%f_w`, `%f_tv`, `%f_vs`, `%abw`, `%abf`: 4, 8, 4, 4, 1, 1 per tile on both sides. `%stage`: no loop holds both sides, so the pipeline body counts: 2 and 2 |
-| P3 | each `put` precedes its `get`; in the tile loop the order is SPLU → XVU → ABSU/ABLU → TU → VU → SPSU, the order of the data |
-| P4 | `%ws`, `%xs`: written by NCLU, read by SPLU, covered by `%stage`. `%ys`: written by SPSU, read by NCSU, covered by `%done`. AB: written by ABSU, read by the ABLUs, covered by `%abw`; the next block's write by `%abf`. No buffer is rewritten after a read in the same pipeline otherwise |
-| P5 | NCLU → SPLU → XVU → {TU, ABSU → ABLU → TU} → VU → SPSU → NCSU. Acyclic; `%abf` is a rewrite channel |
-| P6 | `%f_n0`: the `loop 64` pushes 1 line per iteration and `load_weights` takes each as it arrives (block 1). `%f_ab`: 4 (the `matmul` block). `%f_w`, `%f_tv`, `%f_vs`: 4. `%stage`: 1 |
-| P7 | TU: LRF0..7 weights, LRF8..11 partial sums. AB: 64 B per block in a 1 KB ring. SP: 128 lines |
+### Distributed form
 
-The distributed form, after expansion and loop distribution (SPLU, XVU, ABSU, ABLU, TU, VU; NCLU, SPSU and NCSU
-keep their ops in the same way):
+Each unit's program is its ops of the sequential form under the same loops. Register initialization and
+pointer arithmetic are as above and left out where they repeat it.
 
 ```mlir
-    unit @splu () {
-      %wp0, %lst = splu.reg_init %ws - 128, 128 : !lrf<i32>, !lrf<i32>
-      %xp0       = splu.reg_init %xs - 128 : !lrf<i32>
-      splu.sync get %stage
-      %wp2 = loop 64 iter(%wp = %wp0) {
-        %wpn = splu.ldu consumer -> %f_sx, SP[%wp + %lst] : !lrf<i32>
-        yield %wpn
-      }
-      splu.sync get %stage
-      %xp2 = loop 8 iter(%xp = %xp0) {
-        %xpn = splu.ldu consumer -> %f_sx, SP[%xp + %lst] {burst_size = 4} : !lrf<i32>
-        yield %xpn
-      }
-      splu.return
+    unit @nclu () {                                     // SHM -> SP, lines
+      loop 64 { ldmu SP[%sb + %s : 16], SHM[%cb + %c : 16] }      // x: 1024 lines
+      sync put %stage
+      loop 128 { ldmu SP[%tb + %t : 16], SHM[%ub + %u : 16] }     // w: 2048 lines
+      sync put %stage
+      return
     }
 
-    unit @xvu () {
-      loop 64 {
-        xvu.logical tu_tgt = src0 -> %f_n0, %f_sx, CONST0 {immediate = 1}
-      }
-      loop 8 {
-        loop 4 {
-          xvu.logical ab_tgt = src0 -> %f_ab, %f_sx, CONST0 {immediate = 1}
+    unit @splu () {                                     // SP -> XVU, bytes
+      sync get %stage ; sync get %stage
+      loop 4 {                                          // nb
+        loop 8 {                                        // g
+          loop 8 {                                      // kb
+            loop 64 { ldu consumer = %f_sx, SP[%wp + %st] }                    // weight tile: 64 lines, 8 KB
+            loop 4 { ldu consumer = %f_sx, SP[%xp + %st] {burst_size = 4} }    // 4 tiles: 16 lines, 2 KB
+            modlrfimm %wp, 192 * 128 ; modlrfimm %xp, 112 * 128
+          }
+          modlrfimm %wp, -2048 * 128 ; modlrfimm %xp, -1008 * 128
         }
+        modlrfimm %wp, 64 * 128 ; modlrfimm %xp, -128 * 128
       }
-      xvu.return
+      return
     }
 
-    unit @absu () {
-      %a0, %ast = absu.reg_init -16, 16 : !lrf<i10>, !lrf<i10>
-      %a2 = loop 8 iter(%a = %a0) {
-        %an = absu.stu AB[%a + %ast : 4], %f_ab {burst_en = 1} : !lrf<i10>
-        absu.sync put %abw
-        absu.sync get %abf
-        yield %an
-      }
-      absu.return
+    unit @xvu () {                                      // FIFO to FIFO
+      loop 4 { loop 8 { loop 8 {                        // nb, g, kb
+        loop 64 { logical tu_tgt = src0 -> %f_n0, %f_sx, CONST0 {immediate = 1} }            // weights
+        loop 4 { loop 4 { logical ab_tgt = src0 -> %f_ab, %f_sx, CONST0 {immediate = 1} } }  // acts
+      } } }
+      return
     }
 
-    unit @ablu attributes {rows = 8} () {
-      %h0, %h1, %hst = ablu.reg_init -16, -8, 16 : !lrf<i10>, !lrf<i10>, !lrf<i10>
-      %g0e, %g1e = loop 8 iter(%g0 = %h0, %g1 = %h1) {
-        ablu.sync put %abf
-        ablu.sync get %abw
-        %g0n = ablu.ldu consumer -> %f_w, AB[%g0 + %hst : 4] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
-        %g1n = ablu.ldu consumer -> %f_w, AB[%g1 + %hst : 4] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
-        yield %g0n, %g1n
-      }
-      ablu.return
+    unit @mxu () {                                      // expanded only at emission
+      loop 4 { loop 8 { loop 8 {                        // nb, g, kb
+        mxu.matmul out = %f_tv, weights = %f_n0, acts = %f_ab {tiles = 4, m_rows = 4, dtype = dlf16}
+      } } }
+      return
     }
 
-    unit @tu attributes {rows = 8, cols = 8} () {
-      %r     = tu.row_id : index
-      %north = tu.north_link : !tu.link<vector<8xdlf16>>
-      %west  = tu.west_link  : !tu.link<vector<8xdlf16>>
-      %w0, %w1, %w2, %w3, %w4, %w5, %w6, %w7 = tu.fma_r #0, %north, #1.0 {unroll = 8}
-          : 8 x !tu.lrf<vector<8xdlf16>>
-      loop (56 - 8 * %r) {
-        tu.fma %north, #0, #1.0 {south_tgt = src0}
-      }
-      loop 8 {
-        %p0, %p1, %p2, %p3 = tu.fma_r (%w0, %w1, %w2, %w3), select(%r == 0, #0, %north), %west
-                                      {east_tgt = src2, dot_len = 4, unroll = 4}
-            : 4 x !tu.lrf<vector<8xdlf18>>
-        tu.fma (%w4, %w5, %w6, %w7), (%p0, %p1, %p2, %p3), %west
-               {east_tgt = src2, south_tgt = result, dot_len = 4, unroll = 4}
-      }
-      tu.return
+    unit @vu () {                                       // LRF 4i .. 4i+3 hold tile i
+      loop 4 { loop 8 {                                 // nb, g
+        immcopy 0 {unroll = 16}
+        loop 8 {                                        // kb; loop i unrolled
+          fma lrf_tgt = LRF0,  %f_tv, CONST4, LRF0  {unroll = 4}
+          fma lrf_tgt = LRF4,  %f_tv, CONST4, LRF4  {unroll = 4}
+          fma lrf_tgt = LRF8,  %f_tv, CONST4, LRF8  {unroll = 4}
+          fma lrf_tgt = LRF12, %f_tv, CONST4, LRF12 {unroll = 4}
+        }
+        fma sp_tgt = result -> %f_vs, LRF0,  CONST4, CONST0 {unroll = 4}
+        fma sp_tgt = result -> %f_vs, LRF4,  CONST4, CONST0 {unroll = 4}
+        fma sp_tgt = result -> %f_vs, LRF8,  CONST4, CONST0 {unroll = 4}
+        fma sp_tgt = result -> %f_vs, LRF12, CONST4, CONST0 {unroll = 4}
+      } }
+      return
     }
 
-    unit @vu () {
-      loop 8 {
-        vu.fma sp_tgt = result -> %f_vs, %f_tv, CONST4, CONST0 {unroll = 4}
-      }
-      vu.return
+    unit @spsu () {                                     // VU -> SP, bytes
+      loop 4 { loop 8 {                                 // nb, g
+        loop 4 { stu SP[%o + %ost], %f_vs {burst_size = 4} }   // 16 lines at Y0 + 128·nb + 16·g
+        sync put %done
+      } }
+      return
+    }
+
+    unit @ncsu () {                                     // SP -> SHM, lines
+      loop 4 { loop 8 {                                 // nb, g
+        sync get %done
+        stmu SHM[%eb + %e : 16], SP[%db + %d : 16]      // 16 lines to Y + 128·nb + 16·g
+      } }
+      return
     }
 ```
 
-Compared with `down_proj`'s [R1](#region-r1-every-dnc), which runs one tile, the only change is the tile loop
-around the per-tile ops of each unit, and the weights stay outside it. A K longer than 64 adds a K loop and a VU
-accumulator carried by `iter` / `yield`; the loop orders and their cost are in
-[`matmul-k-outer-schedule.md`](matmul-k-outer-schedule.md).
+Checked against the rules:
 
-### Algorithms
+| Rule | Check |
+|---|---|
+| P2 | per iteration of `kb`: `%f_sx` 64 + 16 pushed and popped; `%f_n0` 64 and 64; `%f_ab` 16 and 16; `%f_tv` 16 and 16. Per `i` of the output loop: `%f_vs` 4 and 4. Per `g`: `%done` 1 and 1. Pipeline body: `%stage` 2 and 2 |
+| P3 | each `put` before its `get`; per K block the data order SPLU → XVU → MXU → VU |
+| P4 | x, w: written by the NCLU, read by the SPLU, covered by `%stage`; y: SPSU, then NCSU, covered by `%done` |
+| P5 | NCLU → SPLU → XVU → MXU → VU → SPSU → NCSU: acyclic |
+| P6 | `%f_n0`: 1 line (the MXU takes weights as they come); `%f_ab`, `%f_tv`: 4 lines (a tile at a time, against the `loop 4`s of the XVU and VU); `%f_vs`: 4 |
+| P7 | VU: LRF0..15 for the group's accumulators; MXU: its own; SP: 3584 lines |
 
-The input is a pipeline in sequential form. The steps run in order; each check reports the op and the rule it
-breaks.
+## Algorithms
 
-**1. Expand macros.** Replace each macro op by its template at the same place. Move the template's register
-preload and declarations to the pipeline entry, and add its pointer registers to the `iter` / `yield` of every loop
-around the site. Afterwards every op is an ISA op of one unit.
+The input is a pipeline in sequential form. The checks run in order; each reports the op and the rule it
+breaks. The MXU is one unit throughout.
 
-**2. Check units (P1).** For each op, record its unit. For each register, the unit of its defining op (for a loop
+**1. Check units (P1).** For each op, record its unit. For each register, the unit of its defining op (for a loop
 result or `iter` argument, the unit of the `yield` operand) must equal the unit of every use. For each FIFO and
 channel, collect its push (`put`) ops and pop (`get`) ops and check that each set has one unit, the one declared.
 
-**3. Check FIFOs and channels (P2, P3).** For each FIFO or channel `c`:
+**2. Check FIFOs and channels (P2, P3).** For each FIFO or channel `c`:
 
-- Token count of an op on `c`: the burst times the unroll for a FIFO op, 1 for a `put` or `get`, multiplied by the
-  trip counts of the loops between the op and the loop being checked. A trip count that is a register or a JCR
-  must be the same value on both sides (the same `%n`), or the check fails.
+- Token count of an op on `c`: the burst times the unroll for a FIFO op (for `mxu.matmul`, its port's count), 1
+  for a `put` or `get`, multiplied by the trip counts of the loops between the op and the loop being checked. A
+  trip count that is a register or a JCR must be the same value on both sides (the same `%n`), or the check fails.
 - For each loop that contains at least one push and one pop of `c` (and for the pipeline body), the token counts
   of pushes and pops in one iteration must be equal (P2).
 - Walk one iteration of each such loop in program order, adding pushes and subtracting pops, a nested loop of one
   side counted as one step with its full count; the running sum must never go below zero (P3).
 
-**4. Check buffers (P4).** For each `alloc` used in the pipeline, collect the ops that read and write it. An SHM
-buffer must have only reads or only writes. An SP or AB buffer must have one writer unit `W` and one reader unit
-`R`. For each write followed by a read in program order, there must be a channel from `W` to `R` with a `put`
-between them in `W` and a `get` between them in `R`, in the program order of each unit; for each read followed by
-a write (in a later iteration of some loop), a channel from `R` to `W` placed the same way. Both channels already
-passed step 3. Overlap of address ranges is decided per buffer, not per line: a buffer counts as rewritten when
-any loop around its writes runs more than once.
+**3. Check buffers (P4).** For each `alloc` used in the pipeline, collect the ops that read and write it. An SHM
+buffer must have only reads or only writes. An SP buffer must have one writer unit `W` and one reader unit `R`.
+For each write followed by a read in program order, there must be a channel from `W` to `R` with a `put` between
+them in `W` and a `get` between them in `R`, in the program order of each unit; for each read followed by a write
+(in a later iteration of some loop), a channel from `R` to `W` placed the same way. Both channels already passed
+step 2. Overlap of address ranges is decided per buffer, not per line: a buffer counts as rewritten when any loop
+around its writes runs more than once. The AB is inside the MXU and not checked here.
 
-**5. Check cycles (P5).** Build a graph with one node per unit and one edge per FIFO (pusher → popper) and per
-read-after-write channel of step 4 (`W` → `R`); TU rows are one node. It must be acyclic. With P2 and P3, a cycle
+**4. Check cycles (P5).** Build a graph with one node per unit (the MXU is one) and one edge per FIFO (pusher →
+popper) and per read-after-write channel of step 3 (`W` → `R`). It must be acyclic. With P2 and P3, a cycle
 would not deadlock, but the units on it could not overlap iterations, so the pipeline would drain once per
 iteration.
 
-**6. Check capacity (P6).** <a id="capacity"></a>For each FIFO, walk one iteration of the loops of step 3 in
-program order as in P3 and record the largest running sum, with one change: a pop by an op whose port contract has
-block 1 (an ISA op that pops one token per beat, `load_weights`) is interleaved with the pushes before it, so the
-pair adds at most 1. A pop with block `b` (an ABSU `stu` of `b` lines, `matmul`'s `acts`) adds `b`. The largest sum
-must not exceed the FIFO's depth; for a channel, the largest number of `put`s ahead of `get`s must not exceed its
-counter. P2 bounds every sum by the tokens of one loop iteration, so the walk never leaves one loop body.
+**5. Check capacity (P6).** <a id="capacity"></a>For each FIFO, walk one iteration of the loops of step 2 in
+program order as in P3 and record the largest running sum, with one change: a pop that progresses one unit at a
+time (an ISA op that pops one token per beat; the MXU's `weights`) is interleaved with the pushes before it, so the
+pair adds at most 1, and one that progresses a tile at a time (the MXU's `acts` and `out`) adds one tile. The
+largest sum must not exceed the FIFO's depth; for a channel, the largest number of `put`s ahead of `get`s must
+not exceed its counter. P2 bounds every sum by the tokens of one loop iteration, so the walk never leaves one
+loop body.
 
-**7. Check resources (P7).** Count the registers live in each unit (`!tu.wtile` is LRF0..7 of every TU row), the
-AB bytes per block against the ring, and the SP lines of the pipeline's buffers.
+**6. Check resources (P7).** Count the registers live in each unit (the MXU's are its template's), and the SP
+lines of the pipeline's buffers.
 
-**8. Distribute loops.** For each unit `u`, copy the body and keep:
+**7. Distribute loops.** For each unit `u`, copy the body and keep:
 
 - the ops of `u`, in the same order;
 - every loop that contains an op of `u`, with the same trip count; a loop without one is dropped;
 - the `iter` / `yield` entries whose values are registers of `u`;
 
-then append `u.return`. The TU program keeps `%r`; the emitter unrolls it into 8 row blocks.
+then append `u.return`. A loop whose index selects a register (the VU's `loop i` over `%acc<i>`) is unrolled.
 
 Why the result runs to completion: each unit's program is its ops in the sequential order, and by P3 every pop in
 that order comes after its push, so executing the sequential body op by op is one schedule of all the units. By P6
@@ -438,7 +460,7 @@ it fits the real FIFO depths and channel counters. The units are sequential prog
 channels (a Kahn process network), whose behavior does not depend on the schedule, so if one schedule completes,
 every schedule does.
 
-**Inserting channels.** A compiler can place the channels of step 4 itself instead of checking hand-written ones:
+**Inserting channels.** A compiler can place the channels of step 3 itself instead of checking hand-written ones:
 a `put` right after the write in `W` and a `get` right before the read in `R`, in the innermost loop that contains
 both, and the reverse for a rewrite. P2 then holds by construction; P5 and P6 still need checking.
 
@@ -481,7 +503,7 @@ kernel @sqrt attributes {spmd_dncs = 16} {
         %p2 = loop 8 iter(%pc = %p1) {                                          // chunk
           splu.sync get %stage
           %pl = loop 8 iter(%p = %pc) {                                         // line
-            %pn = splu.ldu consumer -> %f_ld, SP[%p + %st] : !lrf<i32>   // pushes the line to vu; returns p + st
+            %pn = splu.ldu consumer = %f_ld, SP[%p + %st] : !lrf<i32>   // pushes the line to vu; returns p + st
             yield %pn
           }
           yield %pl
@@ -530,7 +552,7 @@ kernel @sqrt attributes {spmd_dncs = 16} {
         loop 8 {
           splu.sync get %stage
           loop 8 {
-            %p = splu.ldu consumer -> %f_ld, SP[%p + %st] : !lrf<i32, 0>
+            %p = splu.ldu consumer = %f_ld, SP[%p + %st] : !lrf<i32, 0>
           }
         }
         %p = splu.immcopy 0x0 : !lrf<i32, 0>
@@ -577,7 +599,7 @@ From the runtime-length softmax (`tests/test_row_bands.py`, `_softmax(runtime="p
       %n = splu.jshr %t, 6 : !jcr                       // ceil(len / 64)
       splu.sync get %stage
       %p1 = loop %n iter(%p = %p0) {                    // dynamic loop: MVLOOPCNT src0=JCR {dynloop=1}
-        %pn = splu.ldu consumer -> %f_ld, SP[%p + %st] {interleave_sz = 2} : !lrf<i32>
+        %pn = splu.ldu consumer = %f_ld, SP[%p + %st] {interleave_sz = 2} : !lrf<i32>
         yield %pn
       }
       splu.return
@@ -600,7 +622,135 @@ MVLOOPCNT src0=5, typ1_imm=8 {dynloop=1}
 
 Unverified: what `jcr_sel=1` with no `src0` reads, and whether `JCMP ... GE` jumps when the comparison holds.
 
+## Emitting the MXU
+
+After register allocation the emitter replaces the MXU's program by three: the ABSU's, one program for the
+eight ABLUs, and one for the eight TU rows. Each copies the MXU program's loops and replaces every
+`mxu.matmul` by that unit's part of the template below. The MXU's registers are fixed by the template, so the
+three programs come out already allocated.
+
+### Notation for TU rows and grouped registers
+
+| Form | Meaning | Resolved at emit |
+|---|---|---|
+| `unit @tu attributes {rows = 8, cols = 8}`, `%r = tu.row_id` | one program for every TU row (8 slices each) | 8 row blocks, `.place col = r` |
+| `loop (56 - 8 * %r)` | a trip count affine in the row index (or grid indices, Appendix A) | an immediate per copy; a trip of 0 drops the loop |
+| `select(%r == 0, #0, %north)` | an operand chosen by a static predicate | the operand field per copy |
+| `tu.north_link`, `tu.west_link` | the row's fixed input links; each use pops one entry | `FIFO_NORTH`, `FIFO_WEST` |
+| `tu.fma_r` / `tu.fma` | TU `FMA` with register results / with link outputs only (`south_tgt`, `east_tgt`) | one `FMA` |
+| `N x T` after `:` | N results of type T | |
+| `(%w0, %w1, %w2, %w3)` as a `dot_len = 4` operand | the 4 registers of one dot product | consecutive LRFs, `src0=LRF[0:3]` |
+| `(%p0, %p1, %p2, %p3)` under `unroll = 4` | the operand of unroll step `t` is `%p<t>` | consecutive LRFs, `unroll_control.src1=1` |
+| `%r0, …, %rN = op … {unroll = N}` | one result register per unroll step | consecutive LRFs, `unroll_control.lrf_tgt=1` |
+
+`CONST0` and `CONST4` are the VU/XVU constant registers (`.lccr`): 0 and 1.0.
+
+### The template
+
+For `mxu.matmul {tiles = n, m_rows = M}`. A **block** is one tile in the AB: its `M` x lines, of which each TU
+row's AB keeps that row's 8 values (16 bytes) per line, so `M · 16` bytes per row. A row's AB is a ring of 1 KB,
+64 such 16-byte lines, `64 / M` blocks. The ABSU writes blocks while the ABLUs read them; so that it never
+overwrites a block not yet read, the two hand the ring over in halves:
+
+| Symbol | Meaning | `M = 4`, `n = 4` |
+|---|---|---|
+| `H` | blocks in half the ring, `32 / M` | 8 |
+| `NH` | halves the op's `n` blocks fill, `⌈n / H⌉` | 1 |
+| `L` | blocks in the last half, `n − (NH − 1) · H` | 4 |
+
+```mlir
+// TU, every row r: latch the weights, then n tiles
+%w0, …, %w7 = tu.fma_r #0, %north, #1.0 {unroll = 8}     // LRF0..7 := weight lines 8r .. 8r+7 (row 0's north is weights)
+loop (56 - 8 * %r) {
+  tu.fma %north, #0, #1.0 {south_tgt = src0}               // pass a weight line to the rows below
+}
+loop n {
+  %p0, …, %p<M-1> = tu.fma_r (%w0, %w1, %w2, %w3), select(%r == 0, #0, %north), %west
+                              {east_tgt = src2, dot_len = 4, unroll = M}    // K 8r .. 8r+3, into LRF8 ..
+  tu.fma (%w4, %w5, %w6, %w7), (%p0, …, %p<M-1>), %west
+         {east_tgt = src2, south_tgt = result, dot_len = 4, unroll = M}     // K 8r+4 .. +7; row 7's south is out
+}
+
+// ABSU: n blocks, M lines each; pointer LRF0 (bytes in a row's AB, wraps at 1 KB), stride LRF1 = 16
+loop (NH - 1) {
+  loop H { absu.stu AB[LRF0 + LRF1], acts {burst_en = 1, burst_size = M} ; absu.sync put %abw }
+  absu.sync get %abf                                     // the ABLUs have released the half written before
+}
+loop L { absu.stu AB[LRF0 + LRF1], acts {burst_en = 1, burst_size = M} ; absu.sync put %abw }
+absu.sync get %abf
+
+// ABLU, every row: pointers LRF0 and LRF4 (the line's two 8-byte halves), stride LRF15 = 16
+ablu.sync put %abf                                       // the half the ABSU writes first is free
+loop (NH - 1) {
+  loop H { ablu.sync get %abw ; ablu.ldu consumer = west, AB[LRF0 + LRF15] {…, burst_size = M} ;
+                                ablu.ldu consumer = west, AB[LRF4 + LRF15] {…, burst_size = M} }
+  ablu.sync put %abf                                     // this half has been read
+}
+loop L { ablu.sync get %abw ; ablu.ldu … ; ablu.ldu … }
+```
+
+Per op the ABLUs put `%abf` `NH` times and the ABSU gets it `NH` times, so the counts close inside the op; the
+pointers carry on from op to op, so the blocks keep filling the ring in order. The ABSU's get after half `h`
+takes the release of half `h − 1` (or the op's opening put), so it runs at most `H` blocks ahead. `%abw` and
+`%abf` live inside the MXU and never appear in the IR.
+
+With `n ≤ H`, as in the example, `NH = 1`: the ABSU stores its `n` blocks and gets one token, the ABLUs put one
+token and read `n` blocks. Measured on the VP ([`matmul-kouter-vp.md`](matmul-kouter-vp.md)): this form with
+`n = 4` and `n = 2` per op gives the right outputs in the same cycles as one half-ring handshake over the whole
+run. A version that handed the AB over one block at a time, with a fixed credit, hung on the VP.
+
+### The example, emitted
+
+The MXU program of [the matmul example](#distributed-form), `loop 4 { loop 8 { loop 8 { mxu.matmul {tiles = 4} } } }`,
+becomes:
+
+```mlir
+    unit @absu () {                                     // .lrf: LRF0 = 0x3f0 (-16: stu adds first), LRF1 = 16
+      loop 4 { loop 8 { loop 8 {                        // nb, g, kb: one op
+        loop 4 {                                        // its 4 blocks
+          absu.stu AB[LRF0 + LRF1], %f_ab {burst_en = 1, burst_size = 4}   // 4 lines, 64 B per row
+          absu.sync put %abw
+        }
+        absu.sync get %abf
+      } } }
+      absu.return
+    }
+
+    unit @ablu attributes {rows = 8} () {               // .lrf: LRF0 = 0x3f0, LRF4 = 0x3f8, LRF15 = 16
+      loop 4 { loop 8 { loop 8 {                        // nb, g, kb: one op
+        ablu.sync put %abf
+        loop 4 {
+          ablu.sync get %abw
+          ablu.ldu consumer = %f_w, AB[LRF0 + LRF15] {load_type = 1, replicate = 1, burst_en = 1, burst_size = 4}
+          ablu.ldu consumer = %f_w, AB[LRF4 + LRF15] {load_type = 1, replicate = 1, burst_en = 1, burst_size = 4}
+        }
+      } } }
+      ablu.return
+    }
+
+    unit @tu attributes {rows = 8, cols = 8} () {
+      %r = tu.row_id : index
+      loop 4 { loop 8 { loop 8 {                        // nb, g, kb: 256 weight tiles
+        tu.fma_r #0, %north, #1.0 {unroll = 8}          // latch: LRF0..7
+        loop (56 - 8 * %r) { tu.fma %north, #0, #1.0 {south_tgt = src0} }
+        loop 4 {                                        // 4 tiles
+          tu.fma_r (LRF0, LRF1, LRF2, LRF3), select(%r == 0, #0, %north), %west {east_tgt = src2, dot_len = 4, unroll = 4}
+          tu.fma (LRF4, LRF5, LRF6, LRF7), (LRF8, LRF9, LRF10, LRF11), %west
+                 {east_tgt = src2, south_tgt = result, dot_len = 4, unroll = 4}
+        }
+      } } }
+      tu.return
+    }
+```
+
+`%f_w` is the ABLU-to-TU-row link (the row's west), internal to the MXU. The assembler then unrolls `%r` into the
+eight TU row blocks, as in [Appendix A](#emit-time-specialization).
+
 ## Appendix A: `down_proj` as one SPMD program
+
+Written before the MXU op: the TU, ABSU and ABLU code below is spelled out per unit. With the MXU, R1's matrix
+part is one `mxu.matmul {tiles = 1, m_rows = 4}`, which [Emitting the MXU](#emitting-the-mxu) turns into the same
+blocks.
 
 `down_proj` (`x[4,256] @ w[256,64]` on 16 DNCs, mcc's mapping: DNC `d = 4m + k` takes output row `m` and K chunk
 `k`) written in the notation above, as one program for every DNC and one program for every TU row. The motivation
@@ -679,29 +829,29 @@ kernel @down_proj {
       %p0, %st = splu.reg_init %ws - 128, 128 : !lrf<i32>, !lrf<i32>
       splu.sync get %stage
       %p1 = loop 64 iter(%p = %p0) {
-        %pn = splu.ldu consumer -> %f_sx, SP[%p + %st] : !lrf<i32>   // push w line q to xvu
+        %pn = splu.ldu consumer = %f_sx, SP[%p + %st] : !lrf<i32>   // push w line q to xvu
         yield %pn
       }
       %q0 = splu.immcopy %xs - 128 : !lrf<i32>
       splu.sync get %stage
-      %q1 = splu.ldu consumer -> %f_sx, SP[%q0 + %st] {burst_size = 4} : !lrf<i32>   // x tile rows t = 0..3
+      %q1 = splu.ldu consumer = %f_sx, SP[%q0 + %st] {burst_size = 4} : !lrf<i32>   // x tile rows t = 0..3
       splu.return
     }
 
     unit @xvu () {
       loop 64 {
         // <no_ref_def> = opcode %
-        xvu.logical tu_tgt = src0 -> %f_n0, %f_sx, CONST0 {immediate = 1}   // OR 0: pass the w line to the TU
+        xvu.logical  %f_n0, %f_sx, CONST0 {tu_tgt = src0, immediate = 1}   // OR 0: pass the w line to the TU
       }
       loop 4 {
-        xvu.logical ab_tgt = src0 -> %f_ab, %f_sx, CONST0 {immediate = 1}   // pass the x tile to ABSU
+        xvu.logical %f_ab, %f_sx, CONST0 {ab_tgt = src0 ,immediate = 1}   // pass the x tile to ABSU
       }
       xvu.return
     }
 
     unit @absu () {
       %a0, %ast = absu.reg_init -16, 16 : !lrf<i10>, !lrf<i10>           // 10-bit ring, -16 = 0x3f0
-      %a1 = absu.stu AB[%a0 + %ast : 4], %f_ab {burst_en = 1} : !lrf<i10>  // line t: AB_r[16t + 2i] := line_t[8r + i]
+      %a1 = absu.stu AB[%a0 + %ast], %f_ab {burst_en = 1, burst_size = 4} : !lrf<i10>  // line t: AB_r[16t + 2i] := line_t[8r + i]
       absu.sync put %abw
       absu.sync get %abf
       absu.return
@@ -711,9 +861,9 @@ kernel @down_proj {
       %h0, %h1, %st = ablu.reg_init -16, -8, 16 : !lrf<i10>, !lrf<i10>, !lrf<i10>
       ablu.sync put %abf
       ablu.sync get %abw
-      %h2 = ablu.ldu consumer -> %f_w, AB[%h0 + %st : 4] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
+      %h2 = ablu.ldu consumer = %f_w, AB[%h0 + %st] {load_type = 1, replicate = 1, burst_en = 1, burst_size = 4} : !lrf<i10>
                                                                           // t = 0..3: (a, a), a = x[t][8r + 0..3]
-      %h3 = ablu.ldu consumer -> %f_w, AB[%h1 + %st : 4] {load_type = 1, replicate = 1, burst_en = 1} : !lrf<i10>
+      %h3 = ablu.ldu consumer = %f_w, AB[%h1 + %st] {load_type = 1, replicate = 1, burst_en = 1, burst_size = 4} : !lrf<i10>
                                                                           // t = 0..3: (a, a), a = x[t][8r + 4..7]
       ablu.return
     }
@@ -747,7 +897,7 @@ kernel @down_proj {
     }
 
     unit @vu () {
-      vu.fma sp_tgt = result -> %f_vs, %f_tv, CONST4, CONST0 {unroll = 4}   // S_7[t] · 1.0 + 0 -> spsu, t = 0..3
+      vu.fma %f_vs, %f_tv, CONST4, CONST0 {sp_tgt = result, unroll = 4}   // S_7[t] · 1.0 + 0 -> spsu, t = 0..3
       vu.return
     }
 
@@ -811,7 +961,7 @@ adds a handshake at the end of every member's `@r1` and a region `@r2` that only
       unit @splu () {
         %g0, %st = splu.reg_init %gs - 128, 128 : !lrf<i32>, !lrf<i32>
         splu.sync get %gin
-        %g1 = splu.ldu consumer -> %f_gv, SP[%g0 + %st] {burst_size = 4} : !lrf<i32>
+        %g1 = splu.ldu consumer = %f_gv, SP[%g0 + %st] {burst_size = 4} : !lrf<i32>
         splu.return
       }
 
@@ -901,7 +1051,7 @@ current overlap of the first leaf's add with the later leaves' arrival.
 
 In a weight-stationary matmul the TU, ABSU and ABLU programs barely change with the shape. Many architectures
 expose the same function as one matrix unit with one interface. This appendix gives the evidence behind the
-[macro ops](#macro-ops), defines the reduce collective the same way, and lists how to get there.
+[MXU](#the-mxu), defines the reduce collective the same way, and lists how to get there.
 
 ### What changes with the shape today
 
@@ -930,8 +1080,8 @@ west through the AB (a transposed or page-form tiling, `kernel_arm` in `emit_ab.
 The Tenstorrent case is the closest: several small sequencers around one matrix engine, but a library op (the LLK)
 hides them, so a kernel names a tile operation rather than the per-engine code.
 
-The macro ops follow TPU's MXU split (`vmatpush`, `vmatmul`, `vpop`); their types, port contracts and expansion
-are in [Macro ops](#macro-ops), and [Example: matmul with macro ops](#example-matmul-with-macro-ops) uses them.
+[The MXU](#the-mxu) folds TPU's `vmatpush`, `vmatmul` and `vpop` into one op, `mxu.matmul`;
+[Example: matmul](#example-matmul) uses it and [Emitting the MXU](#emitting-the-mxu) expands it.
 
 ### The reduce collective as a template
 
@@ -975,7 +1125,7 @@ grid.on @D (k == 0) {
     %g0, %stg = splu.reg_init %gs - L * 128, L * 128 : !lrf<i32, 11>, !lrf<i32, 10>
     splu.sync get %gin : !chan<nclu -> splu0>
     %g2 = loop L iter(%g = %g0) {
-      %gn = splu.ldu consumer -> %f_gv, SP[%g + %stg] {burst_size = G} : !lrf<i32, 11>   // line l of members 0..G-1
+      %gn = splu.ldu consumer = %f_gv, SP[%g + %stg] {burst_size = G} : !lrf<i32, 11>   // line l of members 0..G-1
       %gb = splu.modlrfimm %gn, -(G * L - 1) * 128 : !lrf<i32, 11>                      // back to line l+1 of member 0
       yield %gb
     }
@@ -1018,12 +1168,12 @@ dependence, and the ISA asks for at least 3 independent instructions between dep
 1. **Inventory.** Normalize every ABSU, ABLU and TU program mcc emits across the dense, conv and attention test
    corpus (masking trip immediates, as in the comparison above) and cluster them into templates plus parameters.
    The output is the variant list the macros must cover; conv's `cin.in` and page-form primes are the likely extras.
-2. **Define the ops and their expanders.** Add `tu.load_weights`, `tu.matmul` and `grid.reduce` to the machine IR
+2. **Define the ops and their expanders.** Add `mxu.matmul` and `grid.reduce` to the machine IR
    with their types and port contracts, and expanders that emit the unit programs. Check that the expansion is
    byte-identical to mcc's output on the corpus (`bytecheck`), so the ops add no behavior.
 3. **Emit them from mcc.** Let mcc produce the macros where `emit_tu.py`, `emit_ab.py` and the reduce lowering now
    emit unit templates, and let the grid IR (Appendix A) refer to them.
-4. **Check pipelines.** Implement [Algorithms](#algorithms) steps 1–8 on the machine IR. It must accept the sqrt
+4. **Check pipelines.** Implement [Algorithms](#algorithms) steps 1–7 on the machine IR. It must accept the sqrt
    and matmul examples and `down_proj`'s `@r1` and `@r2`, and reject an SP accumulator (variant A in
    [`matmul-k-outer-schedule.md`](matmul-k-outer-schedule.md)) and a channel matched across loop iterations.
 5. **Hardware feedback.** With the macros as the only users of the TU and AB units, measure what a matrix-engine
@@ -1031,7 +1181,7 @@ dependence, and the ISA asks for at least 3 independent instructions between dep
    would save in instruction-buffer space and per-row copies.
 
 Open points: whether conv and attention fit the same parameters; AB capacity when blocks lap the 1 KB ring
-(`refuse_ring_lap` in `emit_ab.py`); whether accumulation across K passes belongs in `tu.matmul` or stays in the VU;
+(`refuse_ring_lap` in `emit_ab.py`); whether accumulation across K blocks belongs in `mxu.matmul` or stays in the VU;
 and the FIFO depths and sync counter sizes behind the port contracts and the capacity check (P6), which the ISA
 documentation does not give yet.
 

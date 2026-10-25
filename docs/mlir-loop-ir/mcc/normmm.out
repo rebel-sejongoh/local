@@ -1,0 +1,14 @@
+# kpl body: (Eltwise(args=(0, 0), op='mul', imm=None), Reduce(args=(2,), axis='K', combine='add'), Eltwise(args=(3,), op='mul', imm=0.001953125), Eltwise(args=(4,), op='add', imm=1e-05), Eltwise(args=(5,), op='rsqrt', imm=None), Eltwise(args=(0, 6), op='mul', imm=None), Contract(args=(7, 1)))
+# Expr DAG (kpl_translate.dag_of, before tiling)
+   x:in[M,K]
+   w:in[K,N]
+   mul1=mul(x,x)
+   red2=reduce.add[K](mul1)
+   mul3=mul(red2,0.001953125)
+   add4=add(mul3,1e-05)
+   rsqrt5=rsqrt(add4)
+   mul6=mul(x,rsqrt5)
+   mul7=mul(mul6,w)
+   red8=reduce.add[K](mul7)
+
+# refused before tiling: NotImplementedError: norm_mm: `w` carries ['K', 'N'], none of which is `M`, the level's streaming lane axis

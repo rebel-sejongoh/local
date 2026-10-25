@@ -11,7 +11,7 @@ images [896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 896, 89
    input1:in[R,K]
    input2:in[R,K]
    add1=add(input1,input2)
-  axes= {'lane': ('R', 'r'), 'reduce': (('K', 'k', 'beat'),)}  cross_dnc= None  unit_data= {'VU': {'dtype': 'dlf16'}}
+  axes= {'lane': ('R', 'r'), 'reduce': (('K', 'k', 'beat'),)}  cross_dnc= None  unit_data= <gone>
 
 ######## format_tiled
 tiled.trace  streamaddrs  R=1024 K=2        kind=streaming  units=NCLU,NCSU,VU
@@ -45,7 +45,7 @@ chunks=StreamChunks(size=2, n_full=1, tail=0, compute_passes=1) unroll=1 walks=T
 block: passes= [['add1=add(input1,input2)']]
   {'streamed': ('input1', 'input2'), 'scalars': (), 'shared': (), 'broadcast': (), 'staged': frozenset(), 'collapsed': (), 'K': 2, 'fold': 1, 'ncores': 1, 'stream_passes': 1, 'stream_iters': 1, 'outputs': (('add1', True),), 'units': ('VU',), 'handoffs': (), 'route': Route(loader='SPLU', storer='SPSU')}
 
-######## Mapped op=elementwise op seqs=16 nets=16
+######## Mapped op=op seqs=16 nets=16
 
 ######## Mseq[0] (addressed)
 Mseq dnc=0 op=op tensors=('input1', 'input2', 'add1')
@@ -102,7 +102,7 @@ Mpn dnc=0: 5 processes, 4 channels
   (0, 'SPSU', 0) [('write', 1, 'VU'), ('write', 1, 'VU'), ('put', ('ncsu',))] 
   (0, 'NCSU', None) [('get', ('spsu0',)), ('store', 2, 0), ('fence',)] 
 
-######## FabricProgram (after fold_templates)
+######## FabricProgram (after with_edges)
 FabricProgram units=80 schedule_driven=True sp_fan=1 reduces=False reduce_monoid=None mesync=NoneType broadcast=set() cout_spatial=False
   units: SPSU0@0, SPLU0@0, VU0@0, NCSU@0, NCLU@0, SPSU0@1, SPLU0@1, VU0@1, NCSU@1, NCLU@1, SPSU0@2, SPLU0@2 ...
   edges[0]: 
@@ -166,3 +166,31 @@ UnitProgram NCLU dnc=0 ncore=None col=7 bd={'dnc': 0, 'ncore': None}
     Tmpl LDMU {src0=1, src1=1, src2=1, src3=1, burst=2}
     Tmpl SYNC_ROLE {ref=stage}
     Tmpl RETURN {be=0}
+
+######## Scripts dnc 0 (per mpn process)
+process NCLU:
+Script NCLU dnc=0 counts={} ahead=0 behind=0
+  Dma load  input1 shm[0:+2] -> nc0.sp[0:+2]
+  Dma load  input2 shm[0:+2] -> nc0.sp[0:+2]
+  Sync put splu0
+  Fence dncs=0..15
+process SPLU0:
+Script SPLU0 dnc=0 counts={} ahead=0 behind=0
+  Sync get nclu
+  Rep i1 x2 unit=run
+    Stage SPLU0 input1 sp[i1] -> VU toks=input1[i1]
+    Stage SPLU0 input2 sp[i1] -> VU toks=input2[i1]
+process VU0:
+Script VU0 dnc=0 counts={} ahead=0 behind=0
+  Rep i1 x2 unit=run
+    Compute VU0 op=op pop=input1[i1],input2[i1] push=add1[i1] -> SPSU arith=(add1=add(input1,input2))
+process SPSU0:
+Script SPSU0 dnc=0 counts={} ahead=0 behind=0
+  Rep i1 x2 unit=run
+    Write SPSU0 add1 sp[i1] <- VU toks=add1[i1]
+  Sync put ncsu
+process NCSU:
+Script NCSU dnc=0 counts={} ahead=0 behind=0
+  Sync get spsu0
+  Dma store add1 shm[0:+2] <- nc0.sp[0:+2]
+  Fence dncs=0..15

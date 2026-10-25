@@ -1,0 +1,49 @@
+# Expr DAG
+   input:in[R,K]
+   scale:in[K]
+   mul1=mul(input,input)
+   red2=reduce.add[K](mul1)
+   mul3=mul(red2,0.001953125)
+   add4=add(mul3,1e-05)
+   rsqrt5=rsqrt(add4)
+   mul6=mul(input,rsqrt5)
+   mul7=mul(mul6,scale)
+  axes = {'lane': ('K', 'k'), 'shard': ('R', 'r'), 'reduce': (('K', 'k', 'lane'),)}
+
+# format_tiled
+tiled.trace  streamaddrs  K=512 R=2048        kind=streaming  units=NCLU,NCSU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        input:[R,K]                                   
+        scale:[K]                                     
+        mul1 = mul(input, input)                      
+        red2 = reduce.add(mul1)                       
+        mul3 = mul(red2)                              
+        add4 = add(mul3)                              
+        rsqrt5 = rsqrt(add4)                          
+        mul6 = mul(input, rsqrt5)                     
+        mul7 = mul(mul6, scale)                         → out
+        card  None
+        roles lane=K  shard=R
+
+  spatial
+        dnc[16] = shard.R[16] × split.K[1]
+
+  temporal
+    loop mtile.R[128]
+      LEAF  R=1:line
+              reduce K.blk[8] × K.in[64]   (leaf_K=512)
+
+  accumulate
+        acc_edge None   monoid=add   cadence={'accum': 1, 'npass': 2}   temporal_depth=1
+
+  covers
+        K     lane-reduceleaf 512  (lanes × beats)                   ✓  leaf 512 vs extent 512
+        R     shard  leaf 1 × shard_extent 2048                  ✓  shard_extent 2048 vs extent 2048
+
+# Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=2048, count=16, tie_break='first'))
+
+# StreamPlan / StreamBlock
+chunks=StreamChunks(size=8, n_full=1, tail=0, compute_passes=1) unroll=1 walks=False tail=0
+passes = [['mul1=mul(input,input)', 'red2=reduce.add[K](mul1)', 'mul3=mul(red2,0.001953125)', 'add4=add(mul3,1e-05)', 'rsqrt5=rsqrt(add4)'], ['mul6=mul(input,rsqrt5)', 'mul7=mul(mul6,scale)']]

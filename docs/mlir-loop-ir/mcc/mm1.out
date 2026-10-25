@@ -1,0 +1,13 @@
+# kpl body: (Eltwise(args=(0, 2), op='mul', imm=None), Contract(args=(4, 1)), Eltwise(args=(5, 3), op='add', imm=None), Eltwise(args=(6,), op='max', imm=0.0))
+# Expr DAG (kpl_translate.dag_of, before tiling)
+   x:in[M,K]
+   w:in[K,N]
+   gamma:in[K]
+   bias:in[N]
+   mul1=mul(x,gamma)
+   mul2=mul(mul1,w)
+   red3=reduce.add[K](mul2)
+   add4=add(red3,bias)
+   maximum5=maximum(add4,0.0)
+
+# refused before tiling: NotImplementedError: mm: this seam derives a systolic placement for exactly one held and one streamed operand -- mm traces 4 inputs ['bias', 'gamma', 'w', 'x'], so it chains more than one contraction and needs decomposing into single-contraction leaves first (see this module's docstring)

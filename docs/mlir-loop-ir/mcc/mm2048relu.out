@@ -1,0 +1,52 @@
+# Expr DAG
+   x:in[M,K]
+   w:in[K,N]
+   mul1=mul(x,w)
+   red2=reduce.add[K](mul1)
+   mul3=mul(red2,0.125)
+   y=maximum(mul3,0.0)
+  axes = {'lane': ('N', 'n'), 'shard': ('M', 'm'), 'contract': ('K', 'k')}
+
+# format_tiled
+tiled.trace  _systolic  N=256 M=2048 K=512        kind=systolic  units=ABLU,ABSU,NCLU,NCSU,TU,VU
+────────────────────────────────────────────────────────────────────────────────────────────────────────
+  dag
+        x:[M,K]                                       
+        w:[K,N]                                       
+        mul1 = mul(x, w)                              
+        red2 = reduce.add(mul1)                       
+        mul3 = mul(red2)                              
+        y = maximum(mul3)                               → out
+        card  ComputeOperands(combine='mul', reduce='add', stationary='north', streamed='west')
+        roles lane=N  shard=M  contract=K
+
+  spatial
+        dnc[16] = shard.M[16] × split.K.beat[1]
+        ncore[2]  (within each dnc)
+
+  temporal
+    loop laneblk.N[4]
+      loop mtile.M[16]
+        loop bin.K.beat[8]
+          loop K.bin[8]
+            LEAF  N=256:lane · M=4:line
+                    reduce K.col[8] × K.beat[8]   (leaf_K=512)
+
+  buffers
+        SP:kernel     w    @NCLU
+        SP:ab_bank    x    @NCLU
+        SP:tu_psum    y    @TU
+        SP:vu_acc     acc  @VU
+
+  accumulate
+        acc_edge ('VU', 'VU', 'acc')   monoid=add   cadence={'accum': 8, 'npass': 1}   temporal_depth=8
+
+  covers
+        N     lane   leaf 256  (whole-tensor) × laneblk 4        ✓  laneblk 4 × 1 N slices × lane_width 64 brackets extent 256? (expected ceil(256/64)=4)
+        M     shard  leaf 4 × shard_extent 2048                  ✓  shard_extent 2048 vs extent 2048
+        K     split  leaf 512 × split 1 × bin 8                  ✓  reduce_size 1 × atom 64 × bin 8 = 512, extent 512
+
+# Mdmap
+Mdmap(levels=(Level(axis='M', count=16, kind='shard'),), m_split=Split(extent=2048, count=16, tie_break='first'))
+
+# the build stopped after this IR: ValueError: VU(dnc0): a statement no card lowers: a drain's steps [('mul', 0.125), ('maximum', 0.0)]
