@@ -41,6 +41,10 @@ It is a design sketch: only the generated assembly in [`matmul-kouter-vp.md`](ma
   `!lrf<i32>` (SP unit LRF), `!jcr`. After allocation they carry the index: `!sar<i15, 0>`.
 - The unit prefix of an op names the unit that runs it; `mxu.` names [the MXU](#the-mxu), which stands for the TU,
   ABSU and ABLUs together.
+- `%dnc_id = dnc.id : index` is the index of the DNC running the kernel, `0 .. spmd_dncs - 1`. It is a constant
+  in each DNC's image, bound when the image is emitted: after register allocation it is folded into the
+  registers' initial values (`cbr`). [Appendix A](#appendix-a-down_proj-as-one-spmd-program)'s `grid.index`
+  generalizes it to grid coordinates.
 - Channels: the NC side lists SP units explicitly (`{splu0}`); NCore count is `ncores` on `pipeline`.
 - Branches use our own terminators (`splu.jcmp`, `fallthrough`) with block arguments; hardware loops stay `loop` regions.
 
@@ -85,6 +89,7 @@ The band is rewritten in each of the 2 passes. The distributed form is the code 
 
 ```mlir
 kernel @sqrt attributes {spmd_dncs = 16} {
+  %dnc_id = dnc.id : index
   %inp = alloc : !ptr<buffer<2048 x i1024>, #shm>
   %bi  = alloc {align = 128} : !ptr<buffer<8320 x i8>, #sp>      // 65 lines (64 + 1 guard)
 
@@ -471,6 +476,7 @@ DNC 0).
 
 ```mlir
 kernel @sqrt attributes {spmd_dncs = 16} {
+  %dnc_id = dnc.id : index
   %inp = alloc : !ptr<buffer<2048 x i1024>, #shm>
   %bi  = alloc {align = 128} : !ptr<buffer<8320 x i8>, #sp>      // 65 lines (64 + 1 guard)
 

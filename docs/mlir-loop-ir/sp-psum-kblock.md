@@ -1,7 +1,8 @@
 # Matmul with SP partial sums: footprint blocks and tile-group syncs
 
-The running example of [`mlir-loop-ir.md`](../mlir-loop-ir.md), `y = relu(x @ w + bias)`, with the partial sums
-in SP instead of VU registers. This is the order rcl2's dense matmul runs ("variant A" of
+The running example of [`mlir-loop-ir.md`](../mlir-loop-ir.md), `y = relu(x @ w + bias)`, with its partial sums
+in SP, in more detail than the main document gives: FIFO depths, why B5 is needed, how to choose G. This is the
+order rcl2's dense matmul runs ("variant A" of
 [`matmul-kouter-vp.md`](../matmul-kouter-vp.md)): one weight latch serves every tile of an NCore, KB latches per
 N block instead of KB · T / 4. The fused loop IR is in the canonical form of the main document, with the ops
 named by their units (`nclu.load`, `splu.load`, `spsu.store`, `ncsu.store`).
@@ -203,19 +204,19 @@ The per-NCore blocks of NCore `nc`; the input and output transfers and their syn
           sync get %psum_ready
           for i = 0 .. G {
             …                                                          // get %in_ready
-            splu.load %sp_w[nc, kb, nb, 0] -> %f_sx                    : vector<64x64xdlf16>
-            splu.load %sp_x[kb, Mc*nc + 4*(G*g + i)] -> %f_sx          : vector<4x64xdlf16>
+            splu.load %f_sx, %sp_w[nc, kb, nb, 0]                      : vector<64x64xdlf16>
+            splu.load %f_sx, %sp_x[kb, Mc*nc + 4*(G*g + i)]            : vector<4x64xdlf16>
             …                                                          // put %in_free
-            splu.load %sp_psum[nc, 4*(G*g + i)] -> %f_sv               : vector<4x64xdlf16>   // psum.accumulate's read
+            splu.load %f_sv, %sp_psum[nc, 4*(G*g + i)]                 : vector<4x64xdlf16>   // psum.accumulate's read
           }
         }
       }
       for g = 0 .. T/G {
         sync get %psum_ready
         for i = 0 .. G {
-          splu.load %sp_psum[nc, 4*(G*g + i)] -> %f_sv                 : vector<4x64xdlf16>
+          splu.load %f_sv, %sp_psum[nc, 4*(G*g + i)]                   : vector<4x64xdlf16>
           …                                                            // get %b_ready
-          splu.load %sp_b[nc, nb] -> %f_sv                             : vector<64xdlf16>
+          splu.load %f_sv, %sp_b[nc, nb]                               : vector<64xdlf16>
           …                                                            // put %b_free
         }
       }
@@ -224,41 +225,41 @@ The per-NCore blocks of NCore `nc`; the input and output transfers and their syn
   }
   @xvu {
     for nb = 0 .. NB { for kb = 0 .. KB { for g = 0 .. T/G { for i = 0 .. G {
-      xvu.pass %f_sx -> %f_xm                                          : vector<64x64xdlf16>
-      xvu.pass %f_sx -> %f_xm                                          : vector<4x64xdlf16>
+      xvu.pass %f_xm, %f_sx                                            : vector<64x64xdlf16>
+      xvu.pass %f_xm, %f_sx                                            : vector<4x64xdlf16>
     } } } }
   }
   @mxu {
     for nb = 0 .. NB { for kb = 0 .. KB { for g = 0 .. T/G { for i = 0 .. G {
       %wl = mxu.latch %f_xm                                            : vector<64x64xdlf16>
-      mxu.matmul %wl, %f_xm -> %f_mv                                   : vector<4x64xdlf16>
+      mxu.matmul %f_mv, %wl, %f_xm                                     : vector<4x64xdlf16>
     } } } }
   }
   @vu {
     for nb = 0 .. NB {
       for kb = 0 .. KB { for g = 0 .. T/G { for i = 0 .. G {
-        vu.fma %f_mv, 1.0, %f_sv -> %f_vs                              : vector<4x64xdlf16>   // psum.accumulate's add
+        vu.fma %f_vs, %f_mv, 1.0, %f_sv                                : vector<4x64xdlf16>   // psum.accumulate's add
       } } }
       for g = 0 .. T/G { for i = 0 .. G {
         %yb = vu.fma %f_sv, 1.0, %f_sv                                 : vector<4x64xdlf16>   // the sum, then the bias line
-        vu.max %yb, 0.0 -> %f_vs                                       : vector<4x64xdlf16>
+        vu.max %f_vs, %yb, 0.0                                         : vector<4x64xdlf16>
       } }
     }
   }
   @spsu {
     for nb = 0 .. NB {
-      spsu.store %sp_psum[nc, 0] <- zero                               : vector<Mcx64xdlf16>
+      spsu.store %sp_psum[nc, 0], zero                                 : vector<Mcx64xdlf16>
       for g = 0 .. T/G { sync put %psum_ready }
       for kb = 0 .. KB {
         for g = 0 .. T/G {
           for i = 0 .. G {
-            spsu.store %sp_psum[nc, 4*(G*g + i)] <- %f_vs              : vector<4x64xdlf16>   // psum.accumulate's write
+            spsu.store %sp_psum[nc, 4*(G*g + i)], %f_vs                : vector<4x64xdlf16>   // psum.accumulate's write
           }
           sync put %psum_ready
         }
       }
       for g = 0 .. T/G { for i = 0 .. G {
-        spsu.store %sp_y[nb, Mc*nc + 4*(G*g + i)] <- %f_vs             : vector<4x64xdlf16>
+        spsu.store %sp_y[nb, Mc*nc + 4*(G*g + i)], %f_vs               : vector<4x64xdlf16>
         …                                                              // put %y_ready
       } }
       sync get %psum_free
