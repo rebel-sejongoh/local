@@ -7,7 +7,28 @@ before another has read them. Sync insertion adds the `SYNC` puts and gets that 
 ULoop nest, before projection, so that every check walks a single program order.
 
 Based on `mlir-loop-ir.md` §3 (sync insertion) and the EVT1 ISA's `SYNC`. It fixes two gaps there: shared
-counters (§3) and buffers with more than one slot (§4).
+counters (§4) and buffers with more than one slot (§5).
+
+Where it runs:
+
+```
+mcc's tiled trace
+  │ lower()                 canonical ULoop: one tile per transfer, one slot per SP buffer
+  ▼
+ULoop ──┐ hoist_nc (§9)      larger NC transfers
+        │ buffer (§9)        n slots per SP buffer
+  ▲     │                    plain ULoop: no syncs yet; the interpreter checks each step
+  └─────┘
+  │ insert_syncs (§6)       reads the final loop nest: L, footprints, slots, credits
+  │ checks                  P2, P3, P6, C8
+  │ projection              one uflow.unit per unit
+  ▼
+UFlow
+```
+
+The loop transformations come first, and sync insertion runs once on their result. Syncs are derived
+from the loop nest, never maintained, so no transformation has to move or update them. A transformation
+after insert_syncs would have to keep every put, get and credit consistent with the loops it changes.
 
 ## 1. Who writes and who reads SP
 
@@ -226,13 +247,104 @@ put after read j − 4, the read of the same slot. So:
 
 ```
 slots(W, C):
-  k = innermost loop in C whose iterations (outer indices fixed) write overlapping lines
+  k = the innermost loop in C along which W rewrites lines: two of its iterations, with the
+      loops outside k at the same indices, write overlapping lines
   if no such loop: return 0          # every write fills new lines: no WAR
   return the number of distinct footprints W writes in one iteration of k
          # the product of the trip counts of the loops of C inside k
 ```
 
+`k` is the **reuse loop**. It is not always `L`, the innermost loop of `C`: the loops of `C` inside `k`
+each write different lines, and those are what make the slots.
+
+| Example | C (outer to inner) | L | k | S |
+|---|---|---|---|---|
+| one slot: `%sp[0]` | `i` | `i` | `i` | 1 |
+| four slots: `%sp[i]` | `o`, `i` | `i` | `o` | trip(`i`) = 4 |
+| n-way: `%sp_a[s, 0]` | `j0`, `s` | `s` | `j0` | trip(`s`) = n |
+| every write fills new lines: `%sp[o, i]` | `o`, `i` | `i` | none | 0: no `free` |
+
 If two footprints overlap only in part, S is not defined, and the pass refuses.
+
+### Finding k
+
+**Linear addresses.** Each NCore has its own counters, so `%d` and `%nc` are constants here. A buffer
+is row-major, so the write's index expressions give one linear address in lines:
+
+```
+A = a0 + Σ a_c · c   (c in C)   +   Σ b_u · u   (u: the loops inside W's statement)
+```
+
+`a_c` is loop `c`'s **stride**. The statement's footprint in one iteration of `C` is
+`F(c) = a0 + Σ a_c · c + B`, where `B = {Σ b_u · u + t : 0 ≤ t < lines(W)}` is the same set in every
+iteration. Every footprint is a shifted copy of `B`. Let `m` be `B`'s span, from its first line to its
+last.
+
+**The test.** Two iterations of `C` write overlapping lines when their shifts differ by less than `m`. A
+loop with stride 0 shifts nothing, so all its iterations write the same lines: it rewrites. A loop with a
+nonzero stride writes new lines if its stride steps over everything the finer loops cover. That rule
+holds when the strides nest like the digits of a number:
+
+```
+reuse_loop(W, C):                                   # C: the loops around W and R, outer to inner
+  a, B = linear_address(W)                          # refuse mod, floordiv: not constant strides
+  m = span(B)
+  E = m                                             # the span of everything finer so far
+  for c in C with trip(c) ≥ 2 and a_c ≠ 0, by |a_c| ascending:
+    if |a_c| < E: refuse                            # footprints overlap in part
+    E += |a_c| · (trip(c) − 1)
+  R = [c in C with trip(c) ≥ 2 and a_c = 0]          # the loops that rewrite
+  if R is empty: return none                        # no WAR
+  k = the innermost loop of R
+  S = Π trip(c) over the loops of C inside k        # each writes new lines, by the check above
+  return k, S
+```
+
+- **The order is by stride, not by nesting**, so a loop interchange changes nothing.
+- **A trip count of 1** has no second iteration, so it can neither rewrite nor make a slot. The canonical
+  lowering emits such loops.
+- **Refusing** means the footprints may overlap in part, as with `%sp[2 * i] : !tile4` (stride 2, span 4).
+  A later version can test those exactly. That is a small integer program: is there a difference of
+  iterations, zero outside `k` and nonzero at `k`, whose shift is less than `m`?
+
+**A worked example.** The SPSU writes a 32-line block tile by tile, and the NCSU stores the block in one
+transfer. The block has 2 slots and is reused across `j0`; each `b` uses its own pair of slots.
+
+```
+%sp = uloop.alloc : memref<2x2x2x16x!line, #ucommon.sp>      // [b][s][r][line]: strides 64, 32, 16, 1
+
+for b = 0 .. 2:                                  C
+  for j0 = 0 .. 4:                               C
+    for s = 0 .. 2:                              C, and L: the innermost loop around W and R
+      for r = 0 .. 2:                            u  ┐
+        for t = 0 .. 4:                          u  │ W's statement
+          spsu.store %sp[b, s, r, 4 * t], %v : !tile4  ┘
+      ncsu.store %y[...], %sp[b, s, 0, 0] : 32 lines         R's statement
+```
+
+| Step | Result |
+|---|---|
+| linear address | `A = 64·b + 0·j0 + 32·s + 16·r + 4·t`, each write 4 lines |
+| strides in C | `b`: 64, `j0`: 0, `s`: 32 |
+| `B`, from the u loops | `{16·r + 4·t + x : r < 2, t < 4, x < 4}` = lines 0 .. 31, so `m` = 32 |
+| check `s` (32) | 32 ≥ E = 32; E = 32 + 32 · (2 − 1) = 64 |
+| check `b` (64) | 64 ≥ E = 64; E = 64 + 64 · (2 − 1) = 128 |
+| rewriting loops | `j0` (stride 0, trip 4) |
+| k | `j0` |
+| S | the loops of C inside `j0`: `s`, trip 2, so S = 2 |
+
+The u loops only shape `B`: they run within one iteration of `L`, so they neither rewrite nor make
+slots. `b` lies outside `k`. Its iterations write new lines, so at the step from `b = 0` to `b = 1` the
+SPSU could run further ahead than 2 slots. A credit of 2 holds it back there, which is safe (§5).
+
+| Write | C | Strides `a` | m | Check | k | S |
+|---|---|---|---|---|---|---|
+| `%sp[0] : !tile4` | `i` | `i`: 0 | 4 | | `i` | 1 |
+| `%sp[i, 0] : !tile4` | `o`, `i` | `o`: 0, `i`: 4 | 4 | 4 ≥ 4 | `o` | 4 |
+| `%sp_a[s, 0]`, 32 lines | `j0`, `s` | `j0`: 0, `s`: 32 | 32 | 32 ≥ 32 | `j0` | 2 |
+| `for j2: %sp_c[s, 4 * j2] : !tile4` (statement) | `j0`, `s` | `s`: 32 | 32 (`B` = 8 tiles) | 32 ≥ 32 | `j0` | 2 |
+| `%sp_w[%nc, 0]`, dense, loops `mt`, `t`, `kb` | `mt` (1), `t` (1), `kb` (4) | all 0 | 64 | | `kb` | 1 |
+| `%sp[2 * i] : !tile4` | `i` | `i`: 2 | 4 | 2 < 4 | refused | |
 
 **Credit.** The credit is `min(S, depth − tokens the counter's other dependences hold)` (P6).
 
